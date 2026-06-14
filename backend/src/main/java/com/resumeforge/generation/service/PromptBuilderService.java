@@ -44,21 +44,25 @@ public class PromptBuilderService {
     }
 
     /**
-     * Builds the user prompt by combining anonymized resume data and job description.
-     * PII is stripped from resume data before sending to AI.
+     * Builds the user prompt by combining formatted resume data and job description.
+     * Resume is converted to readable text format for better AI comprehension.
+     *
+     * @param resumeContent The processed resume content (JSON string or plain text)
+     * @param contentFormat "JSON" or "PLAIN_TEXT" indicating the source format
      */
-    public PromptPair buildUserPrompt(String resumeJsonb, String jobTitle, String jobDescription,
-                                      String language, String toneGuidance, String extraInstructions) {
-        String anonymizedResume = anonymizeResume(resumeJsonb);
-        String requirementsList = extractRequirements(jobDescription);
-        String preferencesList = extractPreferences(jobDescription);
-
+    public PromptPair buildUserPrompt(String resumeContent, String contentFormat, String jobTitle,
+                                      String jobDescription, String language, String toneGuidance,
+                                      String extraInstructions) {
         StringBuilder sb = new StringBuilder();
         sb.append("## Dados do Candidato (Curriculo Base)\n\n");
-        sb.append("Os dados abaixo foram fornecidos pelo candidato. Use-os EXCLUSIVAMENTE como fonte de fatos. Nao invente, nao interprete erroneamente, nao omita informacoes relevantes.\n\n");
-        sb.append("```json\n");
-        sb.append(anonymizedResume);
-        sb.append("\n```\n\n");
+        sb.append("As informacoes abaixo foram fornecidas pelo candidato. Use-as EXCLUSIVAMENTE como fonte de fatos.\n");
+        sb.append("Candidate input format: ").append(contentFormat).append("\n\n");
+        sb.append("<candidate_resume_data>\n");
+        sb.append(resumeContent);
+        sb.append("\n</candidate_resume_data>\n\n");
+
+        String requirementsList = extractRequirements(jobDescription);
+        String preferencesList = extractPreferences(jobDescription);
 
         sb.append("## Descricao da Vaga\n\n");
         sb.append("```yaml\n");
@@ -117,43 +121,183 @@ public class PromptBuilderService {
         sb.append("## Output\n\n");
         sb.append("Retorne APENAS o objeto JSON. Sem preambulo, sem pos-ambulo, sem markdown.\n");
 
+        log.debug("User prompt built. Resume content length: {}", resumeContent.length());
         return new PromptPair(systemPrompt, sb.toString());
     }
 
     /**
-     * Strips PII from resume JSONB before sending to AI provider.
-     * Removes: email, phone, linkedin, github, full_name.
-     * Keeps: professional_summary, experience, education, skills, certifications, languages, location.
+     * Formats resume JSONB into readable text for better AI comprehension.
+     * Removes PII and transforms structured data into human-readable format.
      */
     @SuppressWarnings("unchecked")
-    private String anonymizeResume(String resumeJsonb) {
+    private String formatResumeForPrompt(String resumeJsonb) {
         try {
             JsonNode root = objectMapper.readTree(resumeJsonb);
-            ObjectNode anonymized = root.deepCopy();
+            StringBuilder sb = new StringBuilder();
 
-            // Remove top-level PII fields
-            anonymized.remove("email");
-            anonymized.remove("phone");
-            anonymized.remove("linkedin");
-            anonymized.remove("github");
-            anonymized.remove("portfolio");
+            // Summary
+            String summary = getTextValue(root, "summary");
+            if (summary != null && !summary.isBlank()) {
+                sb.append("**Resumo Profissional:**\n").append(summary).append("\n\n");
+            }
 
-            // Remove PII from personalInfo if present
-            if (anonymized.has("personalInfo")) {
-                ObjectNode personalInfo = (ObjectNode) anonymized.get("personalInfo");
-                personalInfo.remove("email");
-                personalInfo.remove("phone");
-                personalInfo.remove("linkedin");
-                personalInfo.remove("github");
-                personalInfo.remove("portfolio");
-                // Keep: fullName (optional for context), location
- }
+            // Experience
+            JsonNode experience = root.get("experience");
+            if (experience != null && experience.isArray() && !experience.isEmpty()) {
+                sb.append("**Experiencia Profissional:**\n");
+                for (JsonNode exp : experience) {
+                    String company = getTextValue(exp, "company");
+                    String role = getTextValue(exp, "role");
+                    String start = getTextValue(exp, "start");
+                    String end = getTextValue(exp, "end", "presente");
+                    String location = getTextValue(exp, "location");
 
-            return objectMapper.writeValueAsString(anonymized);
-        } catch (JsonProcessingException e) {
-            log.warn("Failed to anonymize resume JSON, returning as-is", e);
-            return resumeJsonb;
+                    String period = start != null ? start : "?";
+                    if (end != null) period += " - " + end;
+
+                    sb.append("- ").append(role != null ? role : "N/A");
+                    sb.append(" @ ").append(company != null ? company : "N/A");
+                    sb.append(" (").append(period).append(")");
+                    if (location != null) sb.append(" — ").append(location);
+                    sb.append("\n");
+
+                    JsonNode highlights = exp.get("highlights");
+                    if (highlights != null && highlights.isArray()) {
+                        for (JsonNode h : highlights) {
+                            String highlight = h.asText();
+                            if (highlight != null && !highlight.isBlank()) {
+                                sb.append("  • ").append(highlight).append("\n");
+                            }
+                        }
+                    }
+                    sb.append("\n");
+                }
+            }
+
+            // Education
+            JsonNode education = root.get("education");
+            if (education != null && education.isArray() && !education.isEmpty()) {
+                sb.append("**Formacao:**\n");
+                for (JsonNode edu : education) {
+                    String institution = getTextValue(edu, "institution");
+                    String degree = getTextValue(edu, "degree");
+                    String start = getTextValue(edu, "start");
+                    String end = getTextValue(edu, "end");
+
+                    String period = (start != null ? start : "?") + (end != null ? " - " + end : "");
+                    sb.append("- ").append(degree != null ? degree : "Formacao");
+                    if (institution != null) sb.append(" — ").append(institution);
+                    if (!period.equals("?")) sb.append(" (").append(period).append(")");
+                    sb.append("\n");
+                }
+                sb.append("\n");
+            }
+
+            // Skills
+            JsonNode skills = root.get("skills");
+            if (skills != null && skills.isObject() && !skills.isEmpty()) {
+                sb.append("**Skills:**\n");
+                skills.fields().forEachRemaining(entry -> {
+                    String category = entry.getKey();
+                    JsonNode items = entry.getValue();
+                    if (items.isArray()) {
+                        StringBuilder itemsSb = new StringBuilder();
+                        items.forEach(item -> {
+                            if (itemsSb.length() > 0) itemsSb.append(", ");
+                            itemsSb.append(item.asText());
+                        });
+                        sb.append("- ").append(category).append(": ").append(itemsSb).append("\n");
+                    }
+                });
+                sb.append("\n");
+            }
+
+            // Certifications/Trainings
+            JsonNode trainings = root.get("trainings");
+            JsonNode certifications = root.get("certifications");
+            boolean hasCerts = (trainings != null && trainings.isArray() && !trainings.isEmpty()) ||
+                               (certifications != null && certifications.isArray() && !certifications.isEmpty());
+
+            if (hasCerts) {
+                sb.append("**Certificacoes/Treinamentos:**\n");
+                JsonNode certSource = (trainings != null && trainings.isArray() && !trainings.isEmpty())
+                        ? trainings : certifications;
+                int count = 0;
+                for (JsonNode cert : certSource) {
+                    if (count >= 10) {
+                        sb.append("- ... e mais ").append(certSource.size() - 10).append(" certificacoes\n");
+                        break;
+                    }
+                    String name = getTextValue(cert, "name");
+                    String issuer = getTextValue(cert, "issuer");
+                    String year = getTextValue(cert, "year");
+                    if (name != null) {
+                        sb.append("- ").append(name);
+                        if (issuer != null) sb.append(" (").append(issuer).append(")");
+                        if (year != null) sb.append(" - ").append(year);
+                        sb.append("\n");
+                        count++;
+                    }
+                }
+                sb.append("\n");
+            }
+
+            // Projects (optional, only featured)
+            JsonNode projects = root.get("projects");
+            if (projects != null && projects.isArray() && !projects.isEmpty()) {
+                sb.append("**Projetos Relevantes:**\n");
+                int count = 0;
+                for (JsonNode proj : projects) {
+                    if (count >= 3) break;
+                    boolean featured = proj.has("featured") && proj.get("featured").asBoolean();
+                    if (featured || count < 1) {
+                        String name = getTextValue(proj, "name");
+                        String desc = getTextValue(proj, "description");
+                        JsonNode techs = proj.get("technologies");
+                        if (name != null) {
+                            sb.append("- ").append(name);
+                            if (techs != null && techs.isArray()) {
+                                StringBuilder techSb = new StringBuilder();
+                                int techCount = 0;
+                                for (JsonNode tech : techs) {
+                                    if (techCount >= 5) break;
+                                    if (techSb.length() > 0) techSb.append(", ");
+                                    techSb.append(tech.asText());
+                                    techCount++;
+                                }
+                                sb.append(" (").append(techSb).append(")");
+                            }
+                            sb.append("\n");
+                            if (desc != null && desc.length() > 100) {
+                                sb.append("  ").append(desc.substring(0, 100)).append("...\n");
+                            }
+                            count++;
+                        }
+                    }
+                }
+            }
+
+            return sb.toString();
+
+        } catch (Exception e) {
+            log.warn("Failed to format resume for prompt, returning raw JSON", e);
+            return "```json\n" + resumeJsonb + "\n```";
         }
+    }
+
+    /**
+     * Helper to safely get text value from JsonNode.
+     */
+    private String getTextValue(JsonNode node, String field) {
+        return getTextValue(node, field, null);
+    }
+
+    private String getTextValue(JsonNode node, String field, String defaultValue) {
+        if (node == null || !node.has(field)) return defaultValue;
+        JsonNode value = node.get(field);
+        if (value == null || value.isNull()) return defaultValue;
+        String text = value.asText();
+        return (text != null && !text.isBlank()) ? text : defaultValue;
     }
 
     /**
@@ -171,7 +315,7 @@ public class PromptBuilderService {
         for (Pattern p : patterns) {
             var matcher = p.matcher(jobDescription);
             while (matcher.find()) {
-                String line = matcher.group(1).trim();
+                String line = matcher.groupCount() >= 1 ? matcher.group(1).trim() : matcher.group().trim();
                 if (!line.isEmpty() && line.length() > 5) {
                     sb.append("- ").append(line).append("\n");
                 }
@@ -200,7 +344,7 @@ public class PromptBuilderService {
         for (Pattern p : patterns) {
             var matcher = p.matcher(jobDescription);
             while (matcher.find()) {
-                String line = matcher.group(1).trim();
+                String line = matcher.groupCount() >= 1 ? matcher.group(1).trim() : matcher.group().trim();
                 if (!line.isEmpty() && line.length() > 5) {
                     sb.append("- ").append(line).append("\n");
                 }

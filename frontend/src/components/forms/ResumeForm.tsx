@@ -161,9 +161,82 @@ export function ResumeForm({
 
   const handleFormSubmit = async (data: StructuredFormData) => {
     const markdown = buildMarkdown(data);
+
+    // Build structured JSON from form data
+    const contentJsonb: Record<string, unknown> = {};
+
+    // Profile with contacts
+    if (data.personalName || data.personalEmail || data.personalPhone ||
+        data.personalLocation || data.personalLinkedIn || data.personalGithub) {
+      contentJsonb.profile = {
+        name: data.personalName || '',
+        role: '',
+        location: data.personalLocation || '',
+        contacts: {
+          email: data.personalEmail || '',
+          linkedin: data.personalLinkedIn || '',
+          github: data.personalGithub || '',
+        },
+      };
+    }
+
+    // Summary
+    if (data.summary) {
+      contentJsonb.summary = data.summary;
+    }
+
+    // Experience
+    if (data.experiences && data.experiences.length > 0) {
+      contentJsonb.experience = data.experiences
+        .filter(exp => exp.company || exp.role)
+        .map(exp => ({
+          company: exp.company || '',
+          role: exp.role || '',
+          start: exp.period?.split(' - ')[0] || '',
+          end: exp.period?.split(' - ')[1] || 'presente',
+          highlights: [
+            exp.description,
+            exp.achievements,
+          ].filter(Boolean),
+        }));
+    }
+
+    // Education
+    if (data.education && data.education.length > 0) {
+      contentJsonb.education = data.education
+        .filter(edu => edu.institution || edu.degree)
+        .map(edu => ({
+          institution: edu.institution || '',
+          degree: edu.degree || '',
+          start: edu.period?.split(' - ')[0] || '',
+          end: edu.period?.split(' - ')[1] || '',
+        }));
+    }
+
+    // Skills
+    if (data.skills && data.skills.length > 0) {
+      const skillValues = data.skills
+        .map(s => s.value)
+        .filter(Boolean);
+      if (skillValues.length > 0) {
+        contentJsonb.skills = { 'Habilidades': skillValues };
+      }
+    }
+
+    // Certifications
+    if (data.certifications && data.certifications.length > 0) {
+      const certValues = data.certifications
+        .map(c => c.value)
+        .filter(Boolean);
+      if (certValues.length > 0) {
+        contentJsonb.certifications = certValues.map(value => ({ name: value }));
+      }
+    }
+
     await onSubmit({
       title: data.title,
       contentMarkdown: markdown,
+      contentJsonb: contentJsonb,
       isDefault: data.isDefault,
     });
   };

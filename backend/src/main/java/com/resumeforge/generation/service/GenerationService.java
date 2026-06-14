@@ -1,9 +1,7 @@
 package com.resumeforge.generation.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.resumeforge.ai.provider.GenerationOptions;
 import com.resumeforge.ai.provider.GenerationResult;
 import com.resumeforge.ai.service.AiOrchestrationService;
@@ -15,6 +13,7 @@ import com.resumeforge.exception.ResourceNotFoundException;
 import com.resumeforge.exception.ValidationException;
 import com.resumeforge.generation.dto.*;
 import com.resumeforge.generation.entity.AiRun;
+import com.resumeforge.generation.specification.GeneratedResumeSpecification;
 import com.resumeforge.model.enums.AiRunStatus;
 import com.resumeforge.model.enums.AiRunType;
 import com.resumeforge.generation.entity.AnalysisReport;
@@ -27,6 +26,7 @@ import com.resumeforge.job.repository.JobApplicationRepository;
 import com.resumeforge.logging.service.LoggingService;
 import com.resumeforge.resume.entity.ResumeProfile;
 import com.resumeforge.resume.repository.ResumeProfileRepository;
+import org.springframework.data.jpa.domain.Specification;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -54,6 +54,7 @@ public class GenerationService {
     private final AiOrchestrationService aiOrchestrationService;
     private final PromptBuilderService promptBuilderService;
     private final LoggingService loggingService;
+    private final ResumeContentService resumeContentService;
     private final ObjectMapper objectMapper;
 
     @Value("${ai.temperature:0.3}")
@@ -75,6 +76,7 @@ public class GenerationService {
             AiOrchestrationService aiOrchestrationService,
             PromptBuilderService promptBuilderService,
             LoggingService loggingService,
+            ResumeContentService resumeContentService,
             ObjectMapper objectMapper) {
         this.generatedResumeRepository = generatedResumeRepository;
         this.analysisReportRepository = analysisReportRepository;
@@ -85,6 +87,7 @@ public class GenerationService {
         this.aiOrchestrationService = aiOrchestrationService;
         this.promptBuilderService = promptBuilderService;
         this.loggingService = loggingService;
+        this.resumeContentService = resumeContentService;
         this.objectMapper = objectMapper;
     }
 
@@ -92,7 +95,7 @@ public class GenerationService {
     public GenerationResponse generate(UUID userId, GenerationRequest request) {
         //1. Load and validate resume profile
         ResumeProfile resumeProfile = resumeProfileRepository.findById(request.getResumeProfileId())
- .orElseThrow(() -> new ResourceNotFoundException("Curriculo base nao encontrado"));
+                .orElseThrow(() -> new ResourceNotFoundException("Curriculo base nao encontrado"));
         if (!resumeProfile.getUser().getId().equals(userId)) {
             throw new ForbiddenException("Voce nao tem permissao para usar este curriculo");
         }
@@ -104,11 +107,28 @@ public class GenerationService {
             throw new ForbiddenException("Voce nao tem permissao para usar esta vaga");
         }
 
-        // 3. Build prompts
+        // 3. Process and validate resume content
+        ResumeContentService.ResumeContentResult contentResult = resumeContentService.processResumeContent(
+                resumeProfile.getContentJsonb(),
+                resumeProfile.getContentMarkdown()
+        );
+
+        if (!contentResult.valid()) {
+            log.error("Invalid resume content for generation. Source: {}, Error: {}",
+                    contentResult.sourceType(), contentResult.validationError());
+            throw new ValidationException("Conteudo do curriculo invalido: " + contentResult.validationError());
+        }
+
+        log.info("Resume content validated. Format: {}, Source: {}, Sections: {}, SectionCounts: {}",
+                contentResult.format(), contentResult.sourceType(),
+                contentResult.sectionCount(), contentResult.sectionCounts());
+
+        // 4. Build prompts with validated content
         String language = detectLanguage(jobApplication.getJobDescription());
         String toneGuidance = "professional";
         PromptBuilderService.PromptPair prompts = promptBuilderService.buildUserPrompt(
-                resumeProfile.getContentJsonb(),
+                contentResult.processedContent(),
+                contentResult.format(),
                 jobApplication.getJobTitle(),
                 jobApplication.getJobDescription(),
                 language,
@@ -116,7 +136,7 @@ public class GenerationService {
                 request.getExtraInstructions()
         );
 
-        // 4. Create AI run record
+        // 5. Create AI run record
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario nao encontrado"));
 
@@ -132,7 +152,7 @@ public class GenerationService {
                 .build();
         aiRun = aiRunRepository.save(aiRun);
 
-        // 5. Call AI provider
+        // 6. Call AI provider
         GenerationOptions options = GenerationOptions.builder()
                 .temperature(defaultTemperature)
                 .maxTokens(defaultMaxTokens)
@@ -143,7 +163,7 @@ public class GenerationService {
         GenerationResult result = aiOrchestrationService.generate(
                 prompts.systemPrompt(), prompts.userPrompt(), options);
 
-        // 6. Validate response
+        // 7. Validate response
         if (!result.isSuccess()) {
             aiRun.setStatus(AiRunStatus.FAILED);
             aiRun.setSuccess(false);
@@ -154,24 +174,42 @@ public class GenerationService {
             throw new AiGenerationException("AI generation failed: " + result.errorMessage());
         }
 
-        //7. Parse and validate output
+        // 8. Parse and validate output
         Map<String, Object> parsed = result.parsedResponse();
         if (parsed == null) {
+            log.error("AI response could not be parsed as JSON. Raw response (first 500 chars): {}",
+                    result.rawResponse() != null ? result.rawResponse().substring(0, Math.min(500, result.rawResponse().length())) : "null");
             aiRun.setStatus(AiRunStatus.FAILED);
             aiRun.setSuccess(false);
             aiRun.setErrorCode("INVALID_OUTPUT");
-            aiRun.setErrorMessage("Failed to parse AI response");
+            aiRun.setErrorMessage("Failed to parse AI response as JSON. Check server logs for raw response.");
             aiRun.setRawResponse(result.rawResponse());
             aiRun.setCompletedAt(OffsetDateTime.now());
             aiRunRepository.save(aiRun);
-            throw new ValidationException("Resposta da IA invalida", null);
+            throw new ValidationException("Resposta da IA invalida: formato inesperado. Tente novamente.", null);
         }
 
-        // 8. Extract markdown and inject header
+        log.debug("AI response parsed successfully. Keys: {}", parsed.keySet());
+
+        // 9. Validate AI response structure and content
+        String responseValidation = resumeContentService.validateAiResponse(parsed, resumeProfile.getContentJsonb());
+        if (responseValidation != null) {
+            log.error("AI response validation failed: {}", responseValidation);
+            aiRun.setStatus(AiRunStatus.FAILED);
+            aiRun.setSuccess(false);
+            aiRun.setErrorCode("INVALID_RESPONSE");
+            aiRun.setErrorMessage(responseValidation);
+            aiRun.setRawResponse(result.rawResponse());
+            aiRun.setCompletedAt(OffsetDateTime.now());
+            aiRunRepository.save(aiRun);
+            throw new ValidationException(responseValidation);
+        }
+
+        // 10. Extract markdown and inject header
         String markdown = extractMarkdown(parsed);
         markdown = injectHeader(resumeProfile, markdown);
 
-        // 9. Create generated resume with versioning
+        // 11. Create generated resume with versioning
         GeneratedResume previousCurrent = generatedResumeRepository
                 .findCurrentByResumeProfileIdAndJobApplicationId(
                         request.getResumeProfileId(), request.getJobApplicationId())
@@ -185,12 +223,7 @@ public class GenerationService {
         }
 
         String contentText = stripMarkdown(markdown);
-        Map<String, Object> contentJsonbMap;
-        try {
-            contentJsonbMap = objectMapper.readValue(contentJsonb, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
-        } catch (JsonProcessingException e) {
-            contentJsonbMap = new HashMap<>();
-        }
+        Map<String, Object> contentJsonbMap = new HashMap<>(parsed);
 
         int wordCount = contentText.split("\\s+").length;
         int charCount = contentText.length();
@@ -214,7 +247,7 @@ public class GenerationService {
                 .build();
         generatedResume = generatedResumeRepository.save(generatedResume);
 
-        // 10. Create analysis report
+        // 12. Create analysis report
         AnalysisReport analysisReport = buildAnalysisReport(generatedResume, parsed);
         analysisReport = analysisReportRepository.save(analysisReport);
 
@@ -223,7 +256,7 @@ public class GenerationService {
         generatedResume.setMatchScore(matchScore);
         generatedResumeRepository.save(generatedResume);
 
-        // 11. Update AI run
+        // 13. Update AI run
         aiRun.setGeneratedResume(generatedResume);
         aiRun.setStatus(AiRunStatus.SUCCEEDED);
         aiRun.setSuccess(true);
@@ -236,7 +269,7 @@ public class GenerationService {
         aiRun.setCompletedAt(OffsetDateTime.now());
         aiRunRepository.save(aiRun);
 
-        // 12. Log
+        // 14. Log
         loggingService.logInfo(com.resumeforge.model.enums.LogCategory.AI_REQUEST,
                 "AI generation completed",
                 Map.of("provider", result.provider(), "model", result.model(),
@@ -248,10 +281,13 @@ public class GenerationService {
 
     @Transactional(readOnly = true)
     public Page<GeneratedResumeResponse> listGenerated(UUID userId, String companyName, String jobTitle,
-                                                        UUID resumeProfileId, OffsetDateTime dateFrom,
-                                                        OffsetDateTime dateTo, Boolean isCurrent,
-                                                        Pageable pageable) {
-        Page<GeneratedResume> page = generatedResumeRepository.findByUserIdWithFilters(userId, companyName, jobTitle, resumeProfileId, dateFrom, dateTo, isCurrent, pageable);
+                                                        UUID jobApplicationId, UUID resumeProfileId,
+                                                        OffsetDateTime dateFrom, OffsetDateTime dateTo,
+                                                        Boolean isCurrent, Pageable pageable) {
+        Specification<GeneratedResume> spec = GeneratedResumeSpecification.withFilters(
+                userId, companyName, jobTitle, jobApplicationId,
+                resumeProfileId, dateFrom, dateTo, isCurrent);
+        Page<GeneratedResume> page = generatedResumeRepository.findAll(spec, pageable);
         return page.map(this::toGeneratedResumeResponse);
     }
 
@@ -424,7 +460,7 @@ public class GenerationService {
 
     private String injectHeader(ResumeProfile resumeProfile, String markdown) {
         try {
-            JsonNode jsonb = objectMapper.readTree(resumeProfile.getContentJsonb());
+            JsonNode jsonb = objectMapper.valueToTree(resumeProfile.getContentJsonb());
             String fullName = "";
             String email = "";
             String phone = "";
@@ -432,14 +468,30 @@ public class GenerationService {
             String linkedin = "";
             String github = "";
 
-            if (jsonb.has("personalInfo")) {
+            // Try new schema: profile.contacts
+            if (jsonb.has("profile") && jsonb.get("profile").isObject()) {
+                JsonNode profile = jsonb.get("profile");
+                fullName = getNodeText(profile, "name");
+                location = getNodeText(profile, "location");
+
+                if (profile.has("contacts") && profile.get("contacts").isObject()) {
+                    JsonNode contacts = profile.get("contacts");
+                    email = getNodeText(contacts, "email");
+                    phone = getNodeText(contacts, "phone");
+                    linkedin = getNodeText(contacts, "linkedin");
+                    github = getNodeText(contacts, "github");
+                }
+            }
+
+            // Fallback to legacy schema: personalInfo
+            if (fullName.isEmpty() && jsonb.has("personalInfo") && jsonb.get("personalInfo").isObject()) {
                 JsonNode pi = jsonb.get("personalInfo");
-                fullName = pi.has("fullName") ? pi.get("fullName").asText() : "";
-                email = pi.has("email") ? pi.get("email").asText() : "";
-                phone = pi.has("phone") ? pi.get("phone").asText() : "";
-                location = pi.has("location") ? pi.get("location").asText() : "";
-                linkedin = pi.has("linkedin") ? pi.get("linkedin").asText() : "";
-                github = pi.has("github") ? pi.get("github").asText() : "";
+                fullName = getNodeText(pi, "fullName");
+                email = getNodeText(pi, "email");
+                phone = getNodeText(pi, "phone");
+                location = getNodeText(pi, "location");
+                linkedin = getNodeText(pi, "linkedin");
+                github = getNodeText(pi, "github");
             }
 
             StringBuilder header = new StringBuilder();
@@ -465,9 +517,20 @@ public class GenerationService {
         }
     }
 
+    private String getNodeText(JsonNode node, String field) {
+        if (node == null || !node.has(field)) return "";
+        JsonNode value = node.get(field);
+        if (value == null || value.isNull()) return "";
+        String text = value.asText();
+        return (text != null && !text.isBlank()) ? text : "";
+    }
+
     @SuppressWarnings("unchecked")
     private AnalysisReport buildAnalysisReport(GeneratedResume generatedResume, Map<String, Object> parsed) {
-        Map<String, Object> adherence = (Map<String, Object>) parsed.get("adherence_analysis");
+        log.debug("Building analysis report from parsed response. Keys: {}", parsed.keySet());
+
+        // Try to get adherence_analysis, handling case where it might be a String (JSON string)
+        Map<String, Object> adherence = extractMapField(parsed, "adherence_analysis");
         BigDecimal overallScore = BigDecimal.ZERO;
         List<Map<String, Object>> findingsList = new ArrayList<>();
         List<Map<String, Object>> recommendationsList = new ArrayList<>();
@@ -475,26 +538,43 @@ public class GenerationService {
         List<String> missing = new ArrayList<>();
 
         if (adherence != null) {
+            log.debug("adherence_analysis parsed successfully. Keys: {}", adherence.keySet());
+
             Object score = adherence.get("score");
             if (score instanceof Number) {
                 overallScore = BigDecimal.valueOf(((Number) score).doubleValue());
             }
 
-            List<Map<String, Object>> matchedReqs = (List<Map<String, Object>>) adherence.get("matched_requirements");
-            if (matchedReqs != null) {
-                for (Map<String, Object> req : matchedReqs) {
-                    matched.add((String) req.get("requirement"));
-                    findingsList.add(req);
+            // Try to extract matched_requirements
+            Object matchedReqsObj = adherence.get("matched_requirements");
+            if (matchedReqsObj instanceof List) {
+                List<?> matchedReqs = (List<?>) matchedReqsObj;
+                for (Object req : matchedReqs) {
+                    if (req instanceof Map) {
+                        Map<String, Object> reqMap = (Map<String, Object>) req;
+                        Object reqStr = reqMap.get("requirement");
+                        matched.add(reqStr != null ? reqStr.toString() : "");
+                        findingsList.add(reqMap);
+                    }
                 }
             }
 
-            List<Map<String, Object>> unmatchedReqs = (List<Map<String, Object>>) adherence.get("unmatched_requirements");
-            if (unmatchedReqs != null) {
-                for (Map<String, Object> req : unmatchedReqs) {
-                    missing.add((String) req.get("requirement"));
-                    recommendationsList.add(req);
+            // Try to extract unmatched_requirements
+            Object unmatchedReqsObj = adherence.get("unmatched_requirements");
+            if (unmatchedReqsObj instanceof List) {
+                List<?> unmatchedReqs = (List<?>) unmatchedReqsObj;
+                for (Object req : unmatchedReqs) {
+                    if (req instanceof Map) {
+                        Map<String, Object> reqMap = (Map<String, Object>) req;
+                        Object reqStr = reqMap.get("requirement");
+                        missing.add(reqStr != null ? reqStr.toString() : "");
+                        recommendationsList.add(reqMap);
+                    }
                 }
             }
+        } else {
+            log.warn("adherence_analysis is null or could not be parsed as Map. Raw parsed keys: {}",
+                    parsed.keySet());
         }
 
         Map<String, Object> dimensionScores = Map.of("adherence", overallScore);
@@ -515,10 +595,36 @@ public class GenerationService {
                 .build();
     }
 
+    /**
+     * Extracts a Map field from a parsed response, handling the case where the field
+     * might be a JSON string instead of a Map object.
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> extractMapField(Map<String, Object> parsed, String fieldName) {
+        Object field = parsed.get(fieldName);
+        if (field == null) {
+            return null;
+        }
+        if (field instanceof Map) {
+            return (Map<String, Object>) field;
+        }
+        if (field instanceof String) {
+            // Try to parse the string as JSON
+            try {
+                return objectMapper.readValue((String) field, Map.class);
+            } catch (Exception e) {
+                log.warn("Failed to parse {} as JSON: {}", fieldName, e.getMessage());
+                return null;
+            }
+        }
+        log.warn("Field {} has unexpected type: {}", fieldName, field.getClass().getName());
+        return null;
+    }
+
     @SuppressWarnings("unchecked")
     private BigDecimal extractAdherenceScore(Map<String, Object> parsed) {
         try {
-            Map<String, Object> adherence = (Map<String, Object>) parsed.get("adherence_analysis");
+            Map<String, Object> adherence = extractMapField(parsed, "adherence_analysis");
             if (adherence != null && adherence.get("score") instanceof Number) {
                 return BigDecimal.valueOf(((Number) adherence.get("score")).doubleValue());
             }
@@ -636,7 +742,7 @@ public class GenerationService {
 
         return GeneratedResumeResponse.builder()
                 .id(gr.getId())
-                .resumeProfileId(gr.getResumeProfile().getId())
+                .resumeProfileId(gr.getResumeProfile() != null ? gr.getResumeProfile().getId() : null)
                 .jobApplicationId(gr.getJobApplication() != null ? gr.getJobApplication().getId() : null)
                 .companyName(gr.getJobApplication() != null ? gr.getJobApplication().getCompanyName() : null)
                 .jobTitle(gr.getJobApplication() != null ? gr.getJobApplication().getJobTitle() : null)
@@ -655,8 +761,8 @@ public class GenerationService {
                 .analysis(ar.map(a -> GeneratedResumeResponse.AnalysisReportDto.builder()
                         .id(a.getId())
                         .overallScore(a.getOverallScore() != null ? a.getOverallScore().intValue() : null)
-                        .findings(a.getFindings())
-                        .recommendations(a.getRecommendations())
+                        .findings(a.getFindings() != null ? a.getFindings() : new java.util.HashMap<>())
+                        .recommendations(a.getRecommendations() != null ? a.getRecommendations() : new java.util.HashMap<>())
                         .build()).orElse(null))
                 .createdAt(gr.getCreatedAt())
                 .docxGeneratedAt(gr.getDocxGeneratedAt())
