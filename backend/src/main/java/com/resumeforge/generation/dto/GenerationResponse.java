@@ -35,9 +35,11 @@ public class GenerationResponse {
     public static class AnalysisDto {
         private UUID id;
         private int adherenceScore;
+        private String adherenceClassification;
         private String summary;
         private Map<String, List<String>> keywordMap;
         private List<Map<String, Object>> gaps;
+        private List<String> warnings;
     }
 
     @Data

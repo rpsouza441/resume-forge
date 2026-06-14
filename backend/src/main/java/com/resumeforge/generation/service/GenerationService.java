@@ -38,6 +38,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
@@ -55,6 +57,7 @@ public class GenerationService {
     private final PromptBuilderService promptBuilderService;
     private final LoggingService loggingService;
     private final ResumeContentService resumeContentService;
+    private final ContentValidationService contentValidationService;
     private final ObjectMapper objectMapper;
 
     @Value("${ai.temperature:0.3}")
@@ -77,6 +80,7 @@ public class GenerationService {
             PromptBuilderService promptBuilderService,
             LoggingService loggingService,
             ResumeContentService resumeContentService,
+            ContentValidationService contentValidationService,
             ObjectMapper objectMapper) {
         this.generatedResumeRepository = generatedResumeRepository;
         this.analysisReportRepository = analysisReportRepository;
@@ -88,6 +92,7 @@ public class GenerationService {
         this.promptBuilderService = promptBuilderService;
         this.loggingService = loggingService;
         this.resumeContentService = resumeContentService;
+        this.contentValidationService = contentValidationService;
         this.objectMapper = objectMapper;
     }
 
@@ -205,11 +210,30 @@ public class GenerationService {
             throw new ValidationException(responseValidation);
         }
 
-        // 10. Extract markdown and inject header
+        // 10. Call ContentValidationService to validate generated content
+        ContentValidationService.ExtendedValidationResult validationResult = contentValidationService.validateGeneratedContent(
+                parsed, resumeProfile.getContentJsonb(), jobApplication.getJobDescription());
+
+        if (!validationResult.isValid()) {
+            log.warn("Content validation warnings: {}", validationResult.warnings());
+            // Log warnings but don't fail the generation unless critical
+            if (validationResult.hasCriticalIssues()) {
+                aiRun.setStatus(AiRunStatus.FAILED);
+                aiRun.setSuccess(false);
+                aiRun.setErrorCode("CONTENT_VALIDATION_FAILED");
+                aiRun.setErrorMessage("Critical content validation issues: " + String.join(", ", validationResult.warnings()));
+                aiRun.setRawResponse(result.rawResponse());
+                aiRun.setCompletedAt(OffsetDateTime.now());
+                aiRunRepository.save(aiRun);
+                throw new ValidationException("Conteudo gerado nao atende aos requisitos: " + String.join(", ", validationResult.warnings()));
+            }
+        }
+
+        // 11. Extract markdown and inject header
         String markdown = extractMarkdown(parsed);
         markdown = injectHeader(resumeProfile, markdown);
 
-        // 11. Create generated resume with versioning
+        // 12. Create generated resume with versioning
         GeneratedResume previousCurrent = generatedResumeRepository
                 .findCurrentByResumeProfileIdAndJobApplicationId(
                         request.getResumeProfileId(), request.getJobApplicationId())
@@ -247,8 +271,8 @@ public class GenerationService {
                 .build();
         generatedResume = generatedResumeRepository.save(generatedResume);
 
-        // 12. Create analysis report
-        AnalysisReport analysisReport = buildAnalysisReport(generatedResume, parsed);
+        // 13. Create analysis report with enhanced validation
+        AnalysisReport analysisReport = buildAnalysisReport(generatedResume, parsed, validationResult);
         analysisReport = analysisReportRepository.save(analysisReport);
 
         // Update match score on generated resume
@@ -256,7 +280,7 @@ public class GenerationService {
         generatedResume.setMatchScore(matchScore);
         generatedResumeRepository.save(generatedResume);
 
-        // 13. Update AI run
+        // 14. Update AI run
         aiRun.setGeneratedResume(generatedResume);
         aiRun.setStatus(AiRunStatus.SUCCEEDED);
         aiRun.setSuccess(true);
@@ -269,13 +293,13 @@ public class GenerationService {
         aiRun.setCompletedAt(OffsetDateTime.now());
         aiRunRepository.save(aiRun);
 
-        // 14. Log
+        // 15. Log
         loggingService.logInfo(com.resumeforge.model.enums.LogCategory.AI_REQUEST,
                 "AI generation completed",
                 Map.of("provider", result.provider(), "model", result.model(),
                         "tokens", result.totalTokens()));
 
-        //13. Build response
+        // 16. Build response
         return buildGenerationResponse(generatedResume, analysisReport, aiRun);
     }
 
@@ -525,74 +549,367 @@ public class GenerationService {
         return (text != null && !text.isBlank()) ? text : "";
     }
 
+    /**
+     * Enhanced analysis report builder with full validation and detailed requirements tracking.
+     */
     @SuppressWarnings("unchecked")
-    private AnalysisReport buildAnalysisReport(GeneratedResume generatedResume, Map<String, Object> parsed) {
-        log.debug("Building analysis report from parsed response. Keys: {}", parsed.keySet());
+    private AnalysisReport buildAnalysisReport(GeneratedResume generatedResume, Map<String, Object> parsed,
+                                                 ContentValidationService.ValidationResult validationResult) {
+        log.debug("Building enhanced analysis report from parsed response. Keys: {}", parsed.keySet());
 
         // Try to get adherence_analysis, handling case where it might be a String (JSON string)
         Map<String, Object> adherence = extractMapField(parsed, "adherence_analysis");
         BigDecimal overallScore = BigDecimal.ZERO;
         List<Map<String, Object>> findingsList = new ArrayList<>();
         List<Map<String, Object>> recommendationsList = new ArrayList<>();
-        List<String> matched = new ArrayList<>();
-        List<String> missing = new ArrayList<>();
+        List<Map<String, Object>> requirementsMatched = new ArrayList<>();
+        List<Map<String, Object>> requirementsPartial = new ArrayList<>();
+        List<Map<String, Object>> requirementsMissing = new ArrayList<>();
+        List<Map<String, Object>> gaps = new ArrayList<>();
+        List<String> keywords = new ArrayList<>();
+        List<String> warnings = new ArrayList<>();
+
+        // Add validation warnings if any
+        if (validationResult != null && !validationResult.warnings().isEmpty()) {
+            warnings.addAll(validationResult.warnings());
+        }
 
         if (adherence != null) {
             log.debug("adherence_analysis parsed successfully. Keys: {}", adherence.keySet());
 
-            Object score = adherence.get("score");
-            if (score instanceof Number) {
-                overallScore = BigDecimal.valueOf(((Number) score).doubleValue());
+            // Validate adherence_analysis structure
+            List<String> validationErrors = validateAdherenceAnalysis(adherence);
+            if (!validationErrors.isEmpty()) {
+                warnings.addAll(validationErrors);
+                log.warn("Adherence analysis validation issues: {}", validationErrors);
             }
 
-            // Try to extract matched_requirements
+            // Extract and validate score
+            Object score = adherence.get("score");
+            if (score instanceof Number) {
+                double scoreValue = ((Number) score).doubleValue();
+                // Ensure score is within valid range (0-100)
+                if (scoreValue < 0) {
+                    scoreValue = 0;
+                    warnings.add("Score negativo corrigido para 0");
+                } else if (scoreValue > 100) {
+                    scoreValue = 100;
+                    warnings.add("Score maior que 100 corrigido para 100");
+                }
+                overallScore = BigDecimal.valueOf(scoreValue);
+            } else {
+                warnings.add("Score nao encontrado ou invalido na analise de aderencia");
+            }
+
+            // Extract matched_requirements
             Object matchedReqsObj = adherence.get("matched_requirements");
             if (matchedReqsObj instanceof List) {
                 List<?> matchedReqs = (List<?>) matchedReqsObj;
                 for (Object req : matchedReqs) {
                     if (req instanceof Map) {
                         Map<String, Object> reqMap = (Map<String, Object>) req;
-                        Object reqStr = reqMap.get("requirement");
-                        matched.add(reqStr != null ? reqStr.toString() : "");
+                        requirementsMatched.add(reqMap);
                         findingsList.add(reqMap);
+                        // Extract keywords from matched requirements
+                        extractKeywords(reqMap, keywords);
                     }
                 }
             }
 
-            // Try to extract unmatched_requirements
+            // Extract partial_requirements (if present)
+            Object partialReqsObj = adherence.get("partial_requirements");
+            if (partialReqsObj instanceof List) {
+                List<?> partialReqs = (List<?>) partialReqsObj;
+                for (Object req : partialReqs) {
+                    if (req instanceof Map) {
+                        Map<String, Object> reqMap = (Map<String, Object>) req;
+                        requirementsPartial.add(reqMap);
+                        recommendationsList.add(reqMap);
+                        // Add gap with partial severity
+                        addGap(reqMap, "partial", gaps);
+                        extractKeywords(reqMap, keywords);
+                    }
+                }
+            }
+
+            // Extract unmatched_requirements (treated as missing)
             Object unmatchedReqsObj = adherence.get("unmatched_requirements");
             if (unmatchedReqsObj instanceof List) {
                 List<?> unmatchedReqs = (List<?>) unmatchedReqsObj;
                 for (Object req : unmatchedReqs) {
                     if (req instanceof Map) {
                         Map<String, Object> reqMap = (Map<String, Object>) req;
-                        Object reqStr = reqMap.get("requirement");
-                        missing.add(reqStr != null ? reqStr.toString() : "");
+                        requirementsMissing.add(reqMap);
                         recommendationsList.add(reqMap);
+                        // Add gap with missing severity
+                        addGap(reqMap, "missing", gaps);
+                        extractKeywords(reqMap, keywords);
                     }
                 }
             }
+
+            // Also check for requirements by priority if available
+            extractRequirementsByPriority(adherence, requirementsMatched, requirementsPartial, requirementsMissing, gaps, warnings);
+
         } else {
             log.warn("adherence_analysis is null or could not be parsed as Map. Raw parsed keys: {}",
                     parsed.keySet());
+            warnings.add("adherence_analysis nao encontrado na resposta da IA");
         }
 
-        Map<String, Object> dimensionScores = Map.of("adherence", overallScore);
-        List<String> analyzedFieldsList = new ArrayList<>();
-        analyzedFieldsList.addAll(matched);
-        analyzedFieldsList.addAll(missing);
+        // Extract keywords from optimized_resume if not already populated
+        if (keywords.isEmpty()) {
+            extractKeywordsFromResume(parsed, keywords);
+        }
+
+        // Build dimension scores with new classification
+        Map<String, Object> dimensionScores = new HashMap<>();
+        dimensionScores.put("adherence", overallScore);
+        dimensionScores.put("adherenceClassification", classifyScore(overallScore));
+
+        // Build analyzed fields with complete requirements tracking
+        Map<String, Object> analyzedFields = new HashMap<>();
+        analyzedFields.put("matched", requirementsMatched.stream()
+                .map(r -> r.getOrDefault("requirement", r.toString()))
+                .collect(Collectors.toList()));
+        analyzedFields.put("partial", requirementsPartial.stream()
+                .map(r -> r.getOrDefault("requirement", r.toString()))
+                .collect(Collectors.toList()));
+        analyzedFields.put("missing", requirementsMissing.stream()
+                .map(r -> r.getOrDefault("requirement", r.toString()))
+                .collect(Collectors.toList()));
+        analyzedFields.put("keywords", keywords);
+        analyzedFields.put("warnings", warnings);
+
+        // Calculate ATS compatibility based on content analysis
+        BigDecimal atsScore = calculateAtsCompatibility(parsed, keywords);
 
         return AnalysisReport.builder()
                 .generatedResume(generatedResume)
                 .reportType(com.resumeforge.model.enums.ReportType.COMBINED)
-                .reportVersion("v1")
+                .reportVersion("v2")
                 .overallScore(overallScore)
-                .atsCompatibilityScore(BigDecimal.valueOf(75))
-                .dimensionScores(new java.util.HashMap<>(dimensionScores))
-                .findings(new java.util.HashMap<>(Map.of("items", findingsList)))
-                .recommendations(new java.util.HashMap<>(Map.of("items", recommendationsList)))
-                .analyzedFields(new java.util.HashMap<>(Map.of("matched", matched, "missing", missing)))
+                .atsCompatibilityScore(atsScore)
+                .dimensionScores(dimensionScores)
+                .findings(new HashMap<>(Map.of("items", findingsList, "keywords", keywords)))
+                .recommendations(new HashMap<>(Map.of("items", recommendationsList, "gaps", gaps)))
+                .analyzedFields(analyzedFields)
                 .build();
+    }
+
+    /**
+     * Validates adherence_analysis has all expected fields.
+     */
+    private List<String> validateAdherenceAnalysis(Map<String, Object> adherence) {
+        List<String> errors = new ArrayList<>();
+
+        // Check required fields
+        if (!adherence.containsKey("score")) {
+            errors.add("Campo 'score' ausente em adherence_analysis");
+        }
+
+        // Check for at least one requirements list
+        boolean hasMatched = adherence.containsKey("matched_requirements") ||
+                             adherence.containsKey("requirements_matched");
+        boolean hasPartial = adherence.containsKey("partial_requirements") ||
+                            adherence.containsKey("requirements_partial");
+        boolean hasMissing = adherence.containsKey("unmatched_requirements") ||
+                            adherence.containsKey("requirements_missing");
+
+        if (!hasMatched && !hasPartial && !hasMissing) {
+            errors.add("Nenhuma lista de requirements encontrada (matched/partial/missing)");
+        }
+
+        return errors;
+    }
+
+    /**
+     * Classifies score into adherence category (new classification).
+     * 0-30: "Baixa aderência"
+     * 31-50: "Aderência moderada"
+     * 51-70: "Boa aderência"
+     * 71-100: "Alta aderência"
+     */
+    private String classifyScore(BigDecimal score) {
+        if (score == null) return "Sem classificacao";
+        int scoreInt = score.intValue();
+
+        if (scoreInt <= 30) {
+            return "Baixa aderencia";
+        } else if (scoreInt <= 50) {
+            return "Aderencia moderada";
+        } else if (scoreInt <= 70) {
+            return "Boa aderencia";
+        } else {
+            return "Alta aderencia";
+        }
+    }
+
+    /**
+     * Extracts requirements by priority (obrigatorios, importantes, desejaveis).
+     */
+    @SuppressWarnings("unchecked")
+    private void extractRequirementsByPriority(Map<String, Object> adherence,
+                                               List<Map<String, Object>> requirementsMatched,
+                                               List<Map<String, Object>> requirementsPartial,
+                                               List<Map<String, Object>> requirementsMissing,
+                                               List<Map<String, Object>> gaps,
+                                               List<String> warnings) {
+        // Check for priority-based requirements
+        String[] priorities = {"obrigatorios", "importantes", "desejaveis", "required", "preferred", "optional"};
+        for (String priority : priorities) {
+            Object matchedPriority = adherence.get("matched_" + priority);
+            if (matchedPriority instanceof List) {
+                for (Object req : (List<?>) matchedPriority) {
+                    if (req instanceof Map) {
+                        Map<String, Object> reqMap = (Map<String, Object>) req;
+                        reqMap.put("priority", priority);
+                        requirementsMatched.add(reqMap);
+                    }
+                }
+            }
+
+            Object partialPriority = adherence.get("partial_" + priority);
+            if (partialPriority instanceof List) {
+                for (Object req : (List<?>) partialPriority) {
+                    if (req instanceof Map) {
+                        Map<String, Object> reqMap = (Map<String, Object>) req;
+                        reqMap.put("priority", priority);
+                        requirementsPartial.add(reqMap);
+                        addGap(reqMap, "partial", gaps);
+                    }
+                }
+            }
+
+            Object missingPriority = adherence.get("missing_" + priority);
+            if (missingPriority instanceof List) {
+                for (Object req : (List<?>) missingPriority) {
+                    if (req instanceof Map) {
+                        Map<String, Object> reqMap = (Map<String, Object>) req;
+                        reqMap.put("priority", priority);
+                        requirementsMissing.add(reqMap);
+                        addGap(reqMap, "missing", gaps);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Adds a gap entry with severity.
+     */
+    private void addGap(Map<String, Object> requirement, String severity, List<Map<String, Object>> gaps) {
+        String requirementText = requirement.getOrDefault("requirement", "").toString();
+        String justification = requirement.getOrDefault("justification", "").toString();
+
+        Map<String, Object> gap = new HashMap<>();
+        gap.put("requirement", requirementText);
+        gap.put("severity", severity);
+        gap.put("justification", justification);
+
+        // Add priority if present
+        if (requirement.containsKey("priority")) {
+            gap.put("priority", requirement.get("priority"));
+        }
+
+        gaps.add(gap);
+    }
+
+    /**
+     * Extracts keywords from a requirement map.
+     */
+    private void extractKeywords(Map<String, Object> reqMap, List<String> keywords) {
+        // Extract from 'keywords' field
+        Object keywordsObj = reqMap.get("keywords");
+        if (keywordsObj instanceof List) {
+            for (Object kw : (List<?>) keywordsObj) {
+                if (kw != null && !keywords.contains(kw.toString())) {
+                    keywords.add(kw.toString());
+                }
+            }
+        }
+
+        // Extract from 'requirement' text
+        Object requirement = reqMap.get("requirement");
+        if (requirement instanceof String) {
+            extractKeywordsFromText((String) requirement, keywords);
+        }
+    }
+
+    /**
+     * Extracts keywords from text using common patterns.
+     */
+    private void extractKeywordsFromText(String text, List<String> keywords) {
+        if (text == null || text.isBlank()) return;
+
+        // Common technical keywords patterns
+        Pattern techPattern = Pattern.compile("\\b[A-Z][a-zA-Z]+(?:\\s+[A-Z][a-zA-Z]+)*\\b");
+        Matcher matcher = techPattern.matcher(text);
+
+        while (matcher.find()) {
+            String match = matcher.group();
+            if (match.length() > 2 && !keywords.contains(match)) {
+                keywords.add(match);
+            }
+        }
+    }
+
+    /**
+     * Extracts keywords from the resume content.
+     */
+    @SuppressWarnings("unchecked")
+    private void extractKeywordsFromResume(Map<String, Object> parsed, List<String> keywords) {
+        try {
+            Map<String, Object> optimized = (Map<String, Object>) parsed.get("optimized_resume");
+            if (optimized != null) {
+                Object skills = optimized.get("skills");
+                if (skills instanceof List) {
+                    for (Object skill : (List<?>) skills) {
+                        if (skill instanceof String && !keywords.contains(skill.toString())) {
+                            keywords.add(skill.toString());
+                        } else if (skill instanceof Map) {
+                            Object skillName = ((Map<?, ?>) skill).get("name");
+                            if (skillName != null && !keywords.contains(skillName.toString())) {
+                                keywords.add(skillName.toString());
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to extract keywords from resume", e);
+        }
+    }
+
+    /**
+     * Calculates ATS compatibility score based on content analysis.
+     */
+    private BigDecimal calculateAtsCompatibility(Map<String, Object> parsed, List<String> keywords) {
+        int score = 75; // Base score
+
+        try {
+            String markdown = "";
+            Map<String, Object> optimized = (Map<String, Object>) parsed.get("optimized_resume");
+            if (optimized != null && optimized.get("markdown") instanceof String) {
+                markdown = (String) optimized.get("markdown");
+            }
+
+            // Check for common ATS-friendly elements
+            if (markdown.contains("#")) score += 5; // Has headings
+            if (markdown.contains("- ") || markdown.contains("* ")) score += 5; // Has bullet points
+            if (keywords.size() >= 5) score += 5; // Has enough keywords
+            if (markdown.length() > 500) score += 5; // Has sufficient content
+            if (!markdown.contains("|")) score += 5; // No complex tables (ATS-friendly)
+
+            // Check for potential ATS issues
+            if (markdown.contains("***") || markdown.contains("___")) score -= 5; // Decorative lines
+            if (markdown.contains("  \n")) score -= 5; // Multiple spaces (potential formatting issues)
+
+        } catch (Exception e) {
+            log.warn("Failed to calculate ATS compatibility", e);
+        }
+
+        return BigDecimal.valueOf(Math.min(100, Math.max(0, score)));
     }
 
     /**
@@ -660,54 +977,127 @@ public class GenerationService {
         return "PT-BR";
     }
 
-    private GenerationResponse buildGenerationResponse(GeneratedResume gr, AnalysisReport ar, AiRun aiRun) {
-        List<String> matched = new ArrayList<>();
-        List<String> missing = new ArrayList<>();
-        List<Map<String, Object>> gaps = new ArrayList<>();
-        String summary = "";
+    /**
+     * Extracts sections from markdown content if AI didn't return structured sections.
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, String> extractSectionsFromMarkdown(String markdown) {
+        Map<String, String> sections = new LinkedHashMap<>();
 
-        // Extract from findings Map
-        try {
-            Map<String, Object> findingsMap = ar.getFindings();
-            if (findingsMap != null && findingsMap.containsKey("items")) {
-                Object items = findingsMap.get("items");
-                if (items instanceof List) {
-                    for (Object item : (List<?>) items) {
-                        if (item instanceof Map) {
-                            Object req = ((Map<?, ?>) item).get("requirement");
-                            if (req != null) {
-                                String reqStr = req.toString();
-                                matched.add(reqStr);
-                                gaps.add(Map.of("requirement", reqStr, "type", "matched"));
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-            // ignore
+        if (markdown == null || markdown.isBlank()) {
+            return sections;
         }
 
-        // Extract from recommendations Map
+        // Pattern to match markdown headings
+        Pattern headingPattern = Pattern.compile("^#{1,6}\\s+(.+)$", Pattern.MULTILINE);
+        Matcher matcher = headingPattern.matcher(markdown);
+
+        int lastEnd = 0;
+        String currentHeading = "header";
+        StringBuilder currentContent = new StringBuilder();
+
+        while (matcher.find()) {
+            String heading = matcher.group(1).trim();
+            int headingStart = matcher.start();
+
+            // Save previous section content
+            if (currentContent.length() > 0) {
+                sections.put(currentHeading, currentContent.toString().trim());
+            }
+
+            currentHeading = heading;
+            currentContent = new StringBuilder();
+
+            // Append content between this heading and next
+            if (headingStart > lastEnd) {
+                String contentBetween = markdown.substring(lastEnd, headingStart);
+                currentContent.append(contentBetween);
+            }
+
+            lastEnd = matcher.end();
+        }
+
+        // Save last section
+        if (lastEnd < markdown.length()) {
+            currentContent.append(markdown.substring(lastEnd));
+        }
+        if (currentContent.length() > 0) {
+            sections.put(currentHeading, currentContent.toString().trim());
+        }
+
+        return sections;
+    }
+
+    private GenerationResponse buildGenerationResponse(GeneratedResume gr, AnalysisReport ar, AiRun aiRun) {
+        List<String> matched = new ArrayList<>();
+        List<String> partial = new ArrayList<>();
+        List<String> missing = new ArrayList<>();
+        List<Map<String, Object>> gaps = new ArrayList<>();
+        List<String> keywords = new ArrayList<>();
+        List<String> warnings = new ArrayList<>();
+        String summary = "";
+        String adherenceClassification = "Sem classificacao";
+
+        // Extract from analyzed fields
         try {
-            Map<String, Object> recsMap = ar.getRecommendations();
-            if (recsMap != null && recsMap.containsKey("items")) {
-                Object items = recsMap.get("items");
-                if (items instanceof List) {
-                    for (Object item : (List<?>) items) {
-                        if (item instanceof Map) {
-                            Object req = ((Map<?, ?>) item).get("requirement");
-                            if (req != null) {
-                                String reqStr = req.toString();
-                                missing.add(reqStr);
-                                gaps.add(Map.of("requirement", reqStr, "type", "missing"));
-                            }
-                        }
-                    }
+            Map<String, Object> analyzedFields = ar.getAnalyzedFields();
+            if (analyzedFields != null) {
+                Object matchedObj = analyzedFields.get("matched");
+                if (matchedObj instanceof List) {
+                    matched.addAll((List<String>) matchedObj);
+                }
+                Object partialObj = analyzedFields.get("partial");
+                if (partialObj instanceof List) {
+                    partial.addAll((List<String>) partialObj);
+                }
+                Object missingObj = analyzedFields.get("missing");
+                if (missingObj instanceof List) {
+                    missing.addAll((List<String>) missingObj);
+                }
+                Object keywordsObj = analyzedFields.get("keywords");
+                if (keywordsObj instanceof List) {
+                    keywords.addAll((List<String>) keywordsObj);
+                }
+                Object warningsObj = analyzedFields.get("warnings");
+                if (warningsObj instanceof List) {
+                    warnings.addAll((List<String>) warningsObj);
                 }
             }
         } catch (Exception e) {
-            // ignore
+            log.warn("Failed to extract analyzed fields", e);
+        }
+
+        // Extract from dimension scores
+        try {
+            Map<String, Object> dimensionScores = ar.getDimensionScores();
+            if (dimensionScores != null) {
+                Object classification = dimensionScores.get("adherenceClassification");
+                if (classification != null) {
+                    adherenceClassification = classification.toString();
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to extract dimension scores", e);
+        }
+
+        // Build summary
+        int totalRequirements = matched.size() + partial.size() + missing.size();
+        if (totalRequirements > 0) {
+            summary = String.format("%s (%d/%d requirements cobertos)",
+                    adherenceClassification, matched.size(), totalRequirements);
+        }
+
+        // Build gaps from recommendations
+        try {
+            Map<String, Object> recsMap = ar.getRecommendations();
+            if (recsMap != null && recsMap.containsKey("gaps")) {
+                Object gapsObj = recsMap.get("gaps");
+                if (gapsObj instanceof List) {
+                    gaps.addAll((List<Map<String, Object>>) gapsObj);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to extract gaps", e);
         }
 
         return GenerationResponse.builder()
@@ -723,9 +1113,11 @@ public class GenerationService {
                 .analysis(GenerationResponse.AnalysisDto.builder()
                         .id(ar.getId())
                         .adherenceScore(ar.getOverallScore() != null ? ar.getOverallScore().intValue() : 0)
+                        .adherenceClassification(adherenceClassification)
                         .summary(summary)
-                        .keywordMap(Map.of("matched", matched, "missing", missing))
+                        .keywordMap(Map.of("matched", matched, "partial", partial, "missing", missing, "all", keywords))
                         .gaps(gaps)
+                        .warnings(warnings)
                         .build())
                 .aiRun(GenerationResponse.AiRunDto.builder()
                         .id(aiRun.getId())
@@ -761,8 +1153,11 @@ public class GenerationService {
                 .analysis(ar.map(a -> GeneratedResumeResponse.AnalysisReportDto.builder()
                         .id(a.getId())
                         .overallScore(a.getOverallScore() != null ? a.getOverallScore().intValue() : null)
+                        .adherenceClassification(a.getDimensionScores() != null ?
+                                a.getDimensionScores().getOrDefault("adherenceClassification", "").toString() : "")
                         .findings(a.getFindings() != null ? a.getFindings() : new java.util.HashMap<>())
                         .recommendations(a.getRecommendations() != null ? a.getRecommendations() : new java.util.HashMap<>())
+                        .analyzedFields(a.getAnalyzedFields() != null ? a.getAnalyzedFields() : new java.util.HashMap<>())
                         .build()).orElse(null))
                 .createdAt(gr.getCreatedAt())
                 .docxGeneratedAt(gr.getDocxGeneratedAt())

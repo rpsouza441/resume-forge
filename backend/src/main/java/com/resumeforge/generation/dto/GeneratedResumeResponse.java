@@ -42,7 +42,9 @@ public class GeneratedResumeResponse {
     public static class AnalysisReportDto {
         private UUID id;
         private Integer overallScore;
+        private String adherenceClassification;
         private java.util.Map<String, Object> findings;
         private java.util.Map<String, Object> recommendations;
+        private java.util.Map<String, Object> analyzedFields;
     }
 }
