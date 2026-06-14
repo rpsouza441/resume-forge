@@ -1,6 +1,8 @@
 package com.resumeforge.export.converter;
 
 import org.apache.poi.xwpf.usermodel.*;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTPageMar;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTSectPr;
 import org.springframework.stereotype.Component;
 
 import java.math.BigInteger;
@@ -139,8 +141,8 @@ public class MarkdownToDocxConverter {
      */
     private void createBlockquote(XWPFDocument doc, String text) {
         XWPFParagraph p = doc.createParagraph();
-        p.setIndentationLeft(BigInteger.valueOf(720)); // 0.5 inch left indent
-        p.setIndentationRight(BigInteger.valueOf(720));
+        p.setIndentationLeft(720); // 0.5 inch left indent
+        p.setIndentationRight(720);
         p.setSpacingBefore(SPACING_BEFORE);
         p.setSpacingAfter(SPACING_AFTER);
         p.setAlignment(ParagraphAlignment.BOTH);
@@ -162,7 +164,7 @@ public class MarkdownToDocxConverter {
         XWPFParagraph p = doc.createParagraph();
         p.setSpacingBefore(SPACING_BEFORE);
         p.setSpacingAfter(SPACING_AFTER);
-        p.setBorderBottom(XWPFBorderType.SINGLE);
+        p.setBorderBottom(Borders.SINGLE);
  }
 
     /**
@@ -195,40 +197,8 @@ public class MarkdownToDocxConverter {
         p.setSpacingAfter(40);
         p.setAlignment(ParagraphAlignment.BOTH);
 
-        // Apply bullet numbering via native DOCX numbering
-        BigInteger numId = getOrCreateBulletNumbering(doc);
-        p.setNumId(numId);
-
+        p.setIndentationLeft(360);
         processInlineFormatting(p, text);
-    }
-
-    /**
-     * Gets or creates a bullet numbering instance in the document.
-     * Uses the built-in bullet abstract numbering from the DOCX template.
-     *
-     * @param doc the document
-     * @return the numbering ID for bullet lists
-     */
-    private BigInteger getOrCreateBulletNumbering(XWPFDocument doc) {
-        XWPFNumbering numbering = doc.createNumbering();
-
-        // Find the first bullet abstract numbering already defined in the document
-        BigInteger bulletAbstractNumId = null;
-        for (XWPFAbstractNum abstractNum : numbering.getAbstractNums()) {
-            if (abstractNum.getCTAbstractNum().getNumFmt() != null
-                    && "bullet".equals(abstractNum.getCTAbstractNum().getNumFmt().getVal().toString())) {
-                bulletAbstractNumId = abstractNum.getCTAbstractNum().getAbstractNumId();
-                break;
-            }
-        }
-
-        // Fallback: use numId "1" which is typically the built-in bullet in OOXML templates
-        if (bulletAbstractNumId == null) {
-            bulletAbstractNumId = BigInteger.ONE;
-        }
-
-        // Add a numbering instance referencing the bullet abstract num
-        return numbering.addNumInstance(bulletAbstractNumId);
     }
 
     /**

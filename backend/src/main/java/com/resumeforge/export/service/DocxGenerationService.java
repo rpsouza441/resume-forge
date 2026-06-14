@@ -153,19 +153,18 @@ public class DocxGenerationService {
         return "Candidato";
     }
 
-    private String extractNameFromJsonb(String jsonb) {
-        if (jsonb == null || jsonb.isBlank()) return null;
+    private String extractNameFromJsonb(Map<String, Object> jsonb) {
+        if (jsonb == null || jsonb.isEmpty()) return null;
         try {
-            int idx = jsonb.indexOf("\"fullName\"");
-            if (idx == -1) idx = jsonb.indexOf("\"full_name\"");
-            if (idx == -1) return null;
-            int colonIdx = jsonb.indexOf(":", idx);
-            if (colonIdx == -1) return null;
-            int startQuote = jsonb.indexOf("\"", colonIdx);
-            if (startQuote == -1) return null;
-            int endQuote = jsonb.indexOf("\"", startQuote + 1);
-            if (endQuote == -1) return null;
-            return jsonb.substring(startQuote + 1, endQuote);
+            Object personalInfo = jsonb.get("personalInfo");
+            if (personalInfo instanceof Map<?, ?> personalInfoMap) {
+                Object fullName = personalInfoMap.get("fullName");
+                if (fullName == null) fullName = personalInfoMap.get("full_name");
+                return fullName != null ? fullName.toString() : null;
+            }
+            Object fullName = jsonb.get("fullName");
+            if (fullName == null) fullName = jsonb.get("full_name");
+            return fullName != null ? fullName.toString() : null;
         } catch (Exception e) {
             return null;
         }
