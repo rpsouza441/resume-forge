@@ -1,9 +1,55 @@
 'use client';
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { generationApi } from '@/lib/api';
-import type { GenerationRequest, ManualEditRequest } from '@/types';
+import { generationApi, resumeApi } from '@/lib/api';
+import type { GenerationRequest, ManualEditRequest, ResumeHeader } from '@/types';
 import { toast } from 'sonner';
+
+/**
+ * Extracts header from resume profile contentJsonb
+ */
+function extractHeaderFromProfile(profileJsonb: Record<string, unknown> | null): ResumeHeader | null {
+  if (!profileJsonb) return null;
+
+  // Try new schema: profile.contacts
+  const profile = profileJsonb.profile as Record<string, unknown> | undefined;
+  if (profile && typeof profile === 'object') {
+    const name = (profile.name as string) || '';
+    const location = (profile.location as string) || '';
+    const contacts = profile.contacts as Record<string, string> | undefined;
+
+    if (name || contacts) {
+      return {
+        name: name || 'Nome nao disponivel',
+        title: (profile.title as string) || undefined,
+        location: location || undefined,
+        contacts: contacts ? {
+          email: contacts.email,
+          phone: contacts.phone,
+          linkedin: contacts.linkedin,
+          github: contacts.github,
+        } : undefined,
+      };
+    }
+  }
+
+  // Fallback to legacy schema: personalInfo
+  const personalInfo = profileJsonb.personalInfo as Record<string, string> | undefined;
+  if (personalInfo) {
+    return {
+      name: personalInfo.fullName || 'Nome nao disponivel',
+      location: personalInfo.location || undefined,
+      contacts: {
+        email: personalInfo.email,
+        phone: personalInfo.phone,
+        linkedin: personalInfo.linkedin,
+        github: personalInfo.github,
+      },
+    };
+  }
+
+  return null;
+}
 
 export function useGeneratedResumes(params?: {
   companyName?: string;
@@ -28,7 +74,22 @@ export function useGeneratedResumes(params?: {
 export function useGeneratedResume(id: string) {
   return useQuery({
     queryKey: ['generated', id],
-    queryFn: () => generationApi.get(id),
+    queryFn: async (): Promise<import('@/types').GeneratedResume & { header?: ResumeHeader }> => {
+      const resume = await generationApi.get(id);
+
+      // Extract header from resume profile if not present in contentJsonb
+      let header: ResumeHeader | undefined;
+      if (resume.resumeProfileId) {
+        try {
+          const profile = await resumeApi.get(resume.resumeProfileId);
+          header = extractHeaderFromProfile(profile.contentJsonb as Record<string, unknown> | null) || undefined;
+        } catch (e) {
+          console.warn('Failed to fetch resume profile for header extraction:', e);
+        }
+      }
+
+      return { ...resume, header };
+    },
     enabled: !!id,
   });
 }

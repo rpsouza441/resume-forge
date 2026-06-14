@@ -4,6 +4,7 @@ import com.resumeforge.exception.ConflictException;
 import com.resumeforge.exception.ForbiddenException;
 import com.resumeforge.exception.ResourceNotFoundException;
 import com.resumeforge.export.converter.MarkdownToDocxConverter;
+import com.resumeforge.export.converter.StructuredDocxConverter;
 import com.resumeforge.generation.entity.GeneratedResume;
 import com.resumeforge.generation.repository.GeneratedResumeRepository;
 import com.resumeforge.job.entity.JobApplication;
@@ -41,6 +42,7 @@ public class DocxGenerationService {
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
 
     private final MarkdownToDocxConverter converter;
+    private final StructuredDocxConverter structuredConverter;
     private final GeneratedResumeRepository generatedResumeRepository;
     private final ProcessingLogRepository processingLogRepository;
 
@@ -49,6 +51,7 @@ public class DocxGenerationService {
             GeneratedResumeRepository generatedResumeRepository,
             ProcessingLogRepository processingLogRepository) {
         this.converter = converter;
+        this.structuredConverter = new StructuredDocxConverter();
         this.generatedResumeRepository = generatedResumeRepository;
         this.processingLogRepository = processingLogRepository;
     }
@@ -110,11 +113,27 @@ public class DocxGenerationService {
         // 8. Convert markdown to DOCX
         XWPFDocument document;
         try {
-            document = converter.convert(markdown);
+            // Tentar usar estrutura primeiro
+            Map<String, Object> contentJsonb = generatedResume.getContentJsonb();
+
+            if (contentJsonb != null && contentJsonb.containsKey("optimized_resume")) {
+                // Usar estrutura
+                @SuppressWarnings("unchecked")
+                Map<String, Object> optimized = (Map<String, Object>) contentJsonb.get("optimized_resume");
+                StructuredDocxConverter.ResumeStructure structure = StructuredDocxConverter.fromJson(optimized);
+                StructuredDocxConverter.ResumeHeader header = extractHeader(resumeProfile);
+
+                document = structuredConverter.createDocument(header, structure);
+                log.info("DOCX generated from structured data for generatedResumeId={}", generatedResumeId);
+            } else {
+                // Fallback para markdown (temporario)
+                document = converter.convert(markdown);
+                log.warn("DOCX fallback to markdown for generatedResumeId={}", generatedResumeId);
+            }
         } catch (Exception e) {
-            log.error("DOCX conversion failed for generatedResumeId={}", generatedResumeId, e);
-            logProcessingError(generatedResumeId, e);
-            throw new ConflictException("Falha na geracao do DOCX. Tente novamente.");
+            // Fallback final
+            document = converter.convert(markdown);
+            log.error("DOCX conversion failed, using markdown fallback for generatedResumeId={}", generatedResumeId, e);
         }
 
         // 9. Write document to byte array
@@ -151,6 +170,36 @@ public class DocxGenerationService {
             return sanitizeFileNameComponent(name);
         }
         return "Candidato";
+    }
+
+    private StructuredDocxConverter.ResumeHeader extractHeader(ResumeProfile resumeProfile) {
+        String name = extractCandidateName(resumeProfile, "");
+        Map<String, Object> jsonb = resumeProfile.getContentJsonb();
+
+        String title = "";
+        String location = "";
+        String email = "";
+        String phone = "";
+        String linkedin = "";
+        String github = "";
+
+        if (jsonb != null && jsonb.containsKey("profile")) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> profile = (Map<String, Object>) jsonb.get("profile");
+            title = (String) profile.getOrDefault("role", "");
+            location = (String) profile.getOrDefault("location", "");
+
+            if (profile.containsKey("contacts")) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> contacts = (Map<String, Object>) profile.get("contacts");
+                email = (String) contacts.getOrDefault("email", "");
+                phone = (String) contacts.getOrDefault("phone", "");
+                linkedin = (String) contacts.getOrDefault("linkedin", "");
+                github = (String) contacts.getOrDefault("github", "");
+            }
+        }
+
+        return new StructuredDocxConverter.ResumeHeader(name, title, location, email, phone, linkedin, github);
     }
 
     private String extractNameFromJsonb(Map<String, Object> jsonb) {

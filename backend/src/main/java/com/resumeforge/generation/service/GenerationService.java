@@ -554,7 +554,7 @@ public class GenerationService {
      */
     @SuppressWarnings("unchecked")
     private AnalysisReport buildAnalysisReport(GeneratedResume generatedResume, Map<String, Object> parsed,
-                                                 ContentValidationService.ValidationResult validationResult) {
+                                                 ContentValidationService.ExtendedValidationResult validationResult) {
         log.debug("Building enhanced analysis report from parsed response. Keys: {}", parsed.keySet());
 
         // Try to get adherence_analysis, handling case where it might be a String (JSON string)

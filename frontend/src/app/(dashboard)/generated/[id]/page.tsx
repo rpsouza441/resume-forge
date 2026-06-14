@@ -14,6 +14,7 @@ import { DocxDownloadButton } from '@/components/shared/DocxDownloadButton';
 import { AnalysisPanel } from '@/components/shared/AnalysisPanel';
 import { VersionHistory } from '@/components/shared/VersionHistory';
 import { Spinner } from '@/components/ui/Spinner';
+import { StructuredResumePreview } from '@/components/generated/StructuredResumePreview';
 
 type Tab = 'curriculo' | 'analise' | 'historico';
 
@@ -138,9 +139,10 @@ export default function GeneratedDetailPage({ params }: { params: { id: string }
       {activeTab === 'curriculo' && (
         <Card>
           <CardContent className="py-6">
-            <pre className="whitespace-pre-wrap text-sm text-slate-700 font-sans">
-              {resume.contentMarkdown}
-            </pre>
+            <StructuredResumePreview
+              resume={resume.contentJsonb?.optimized_resume}
+              header={resume.header}
+            />
           </CardContent>
         </Card>
       )}

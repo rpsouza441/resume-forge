@@ -227,7 +227,7 @@ public class MarkdownToDocxConverter {
         p.setSpacingBefore(SPACING_BEFORE);
         p.setSpacingAfter(SPACING_AFTER);
         p.setAlignment(ParagraphAlignment.LEFT);  // LEFT, not BOTH (justified)
-        p.setLineSpacing(LINE_SPACING);
+        p.setSpacingBetween(1.0, LineSpacingRule.AUTO);
         processInlineFormatting(p, text);
     }
 
@@ -244,7 +244,7 @@ public class MarkdownToDocxConverter {
         p.setSpacingBefore(SPACING_BEFORE);
         p.setSpacingAfter(SPACING_AFTER);
         p.setAlignment(ParagraphAlignment.LEFT);
-        p.setLineSpacing(LINE_SPACING);
+        p.setSpacingBetween(1.0, LineSpacingRule.AUTO);
 
         XWPFRun run = p.createRun();
         String cleanText = stripInlineFormatting(text);
@@ -289,10 +289,13 @@ public class MarkdownToDocxConverter {
         // Use a simple approach - find max existing ID and add 1
         int maxId = 0;
         try {
-            for (XWPFNumbering numbering : doc.getNumbering()) {
-                int id = numbering.getNumId();
-                if (id > maxId) {
-                    maxId = id;
+            XWPFNumbering numbering = doc.getNumbering();
+            if (numbering != null) {
+                for (XWPFNum num : numbering.getNums()) {
+                    BigInteger id = num.getCTNum().getNumId();
+                    if (id != null && id.intValue() > maxId) {
+                        maxId = id.intValue();
+                    }
                 }
             }
         } catch (Exception e) {
@@ -307,10 +310,13 @@ public class MarkdownToDocxConverter {
     private int allocateAbstractNumId(XWPFDocument doc) {
         int maxId = 0;
         try {
-            for (XWPFNumbering numbering : doc.getNumbering()) {
-                int id = numbering.getAbstractNumId();
-                if (id > maxId) {
-                    maxId = id;
+            XWPFNumbering numbering = doc.getNumbering();
+            if (numbering != null) {
+                for (XWPFNum num : numbering.getNums()) {
+                    BigInteger id = num.getCTNum().getAbstractNumId().getVal();
+                    if (id != null && id.intValue() > maxId) {
+                        maxId = id.intValue();
+                    }
                 }
             }
         } catch (Exception e) {
@@ -332,14 +338,14 @@ public class MarkdownToDocxConverter {
         p.setSpacingBefore(40);
         p.setSpacingAfter(40);
         p.setAlignment(ParagraphAlignment.LEFT);
-        p.setLineSpacing(LINE_SPACING);
+        p.setSpacingBetween(1.0, LineSpacingRule.AUTO);
 
         // Set indentation for bullet
         p.setIndentationLeft(360);
         p.setIndentationHanging(360);
 
         // Apply numbering properties
-        p.setNumId(numId);
+        p.setNumID(BigInteger.valueOf(numId));
 
         // Create run with text
         XWPFRun run = p.createRun();

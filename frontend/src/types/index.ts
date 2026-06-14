@@ -3,6 +3,7 @@ export type { ResumeProfile, ResumeListItem, CreateResumeRequest, UpdateResumeRe
 export type { JobApplication, JobListItem, CreateJobRequest, UpdateJobRequest, JobStatus } from './job';
 export type {
   GeneratedResume, AnalysisReportDto, GenerationRequest, GenerationResponse,
-  VersionResponse, ManualEditRequest
+  VersionResponse, ManualEditRequest, OptimizedResume, ResumeHeader,
+  GeneratedResumeContentJsonb
 } from './generated';
 export type { ApiError, PaginatedResponse } from './api';
