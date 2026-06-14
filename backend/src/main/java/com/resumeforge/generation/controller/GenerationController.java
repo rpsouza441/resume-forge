@@ -49,14 +49,15 @@ public class GenerationController {
             @AuthenticationPrincipal UserPrincipal principal,
             @RequestParam(required = false) String companyName,
             @RequestParam(required = false) String jobTitle,
+            @RequestParam(required = false) UUID jobApplicationId,
             @RequestParam(required = false) UUID resumeProfileId,
             @RequestParam(required = false) OffsetDateTime dateFrom,
             @RequestParam(required = false) OffsetDateTime dateTo,
             @RequestParam(required = false) Boolean isCurrent,
             @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
         Page<GeneratedResumeResponse> page = generationService.listGenerated(
-                principal.getUserId(), companyName, jobTitle, resumeProfileId,
-                dateFrom, dateTo, isCurrent, pageable);
+                principal.getUserId(), companyName, jobTitle, jobApplicationId,
+                resumeProfileId, dateFrom, dateTo, isCurrent, pageable);
 
         PaginatedResponse<GeneratedResumeResponse> response = PaginatedResponse.<GeneratedResumeResponse>builder()
                 .data(page.getContent())

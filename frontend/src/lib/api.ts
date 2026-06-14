@@ -20,10 +20,9 @@ import type {
   ManualEditRequest,
 } from '@/types';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
-
+// Relative URL — Same Origin via nginx reverse proxy. No CORS, no IP fixo no bundle.
 export const api: AxiosInstance = axios.create({
-  baseURL: `${API_BASE_URL}/api`,
+  baseURL: '/api',
   timeout: 30000,
   headers: { 'Content-Type': 'application/json' },
 });
@@ -181,6 +180,6 @@ export const generationApi = {
     return res.data;
   },
   downloadDocx: (id: string): string => {
-    return `${API_BASE_URL}/api/generated/${id}/docx`;
+    return `/api/generated/${id}/docx`;
   },
 };

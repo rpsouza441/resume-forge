@@ -65,7 +65,7 @@ export function GenerationWizard({ onCancel }: GenerationWizardProps) {
         seniority: jobForm.seniority || undefined,
       });
       setJobId(job.id);
-      setStep(3);
+      setStep(2);
     } catch {
       toast.error('Erro ao criar vaga');
     }

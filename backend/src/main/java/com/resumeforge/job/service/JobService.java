@@ -211,11 +211,17 @@ public class JobService {
 
             if (companyName != null && !companyName.isBlank()) {
                 predicates = cb.and(predicates,
-                        cb.like(cb.lower(root.get("companyName")), "%" + companyName.toLowerCase() + "%"));
+                        cb.like(cb.function("lower", String.class,
+                                cb.coalesce(cb.function("text", String.class, root.get("companyName")),
+                                        cb.literal(""))),
+                                "%" + companyName.toLowerCase() + "%"));
             }
             if (jobTitle != null && !jobTitle.isBlank()) {
                 predicates = cb.and(predicates,
-                        cb.like(cb.lower(root.get("jobTitle")), "%" + jobTitle.toLowerCase() + "%"));
+                        cb.like(cb.function("lower", String.class,
+                                cb.coalesce(cb.function("text", String.class, root.get("jobTitle")),
+                                        cb.literal(""))),
+                                "%" + jobTitle.toLowerCase() + "%"));
             }
             if (status != null && !status.isBlank()) {
                 predicates = cb.and(predicates,
