@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { useJob } from '@/hooks/queries/useJobs';
 import { useGenerateResume } from '@/hooks/queries/useGenerated';
 import { useResumes } from '@/hooks/queries/useResumes';
@@ -13,6 +14,7 @@ import { toast } from 'sonner';
 import { useGeneratedResumes } from '@/hooks/queries/useGenerated';
 import { formatDate } from '@/lib/utils';
 import { Spinner } from '@/components/ui/Spinner';
+import { Modal } from '@/components/ui/Modal';
 
 const statusLabels: Record<string, string> = {
   saved: 'Salvo',
@@ -31,16 +33,29 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   const { data: generatedData } = useGeneratedResumes({ jobApplicationId: params.id, size: 50 });
   const generateResume = useGenerateResume();
 
-  const handleGenerate = async () => {
-    if (!job) return;
-    const defaultResume = resumesData?.data.find((r) => r.isDefault) ?? resumesData?.data[0];
-    if (!defaultResume) {
+  const [showResumeModal, setShowResumeModal] = useState(false);
+  const [selectedResumeId, setSelectedResumeId] = useState<string | null>(null);
+
+  const handleOpenGenerate = () => {
+    if (!resumesData?.data?.length) {
       toast.error('Cadastre um curriculo base primeiro');
       return;
     }
+    // Pre-select default resume
+    const defaultResume = resumesData.data.find((r) => r.isDefault) ?? resumesData.data[0];
+    setSelectedResumeId(defaultResume?.id ?? null);
+    setShowResumeModal(true);
+  };
+
+  const handleGenerate = async () => {
+    if (!job || !selectedResumeId) {
+      toast.error('Selecione um curriculo base');
+      return;
+    }
+    setShowResumeModal(false);
     try {
       const result = await generateResume.mutateAsync({
-        resumeProfileId: defaultResume.id,
+        resumeProfileId: selectedResumeId,
         jobApplicationId: job.id,
       });
       router.push(`/generated/${result.id}`);
@@ -72,6 +87,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   }
 
   const generatedList = generatedData?.data ?? [];
+  const resumes = resumesData?.data ?? [];
 
   return (
     <div className="space-y-6">
@@ -85,7 +101,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
           <h1 className="text-2xl font-semibold text-slate-900">{job.jobTitle}</h1>
           <p className="text-slate-500 text-sm">{job.companyName}</p>
         </div>
-        <Button onClick={handleGenerate} isLoading={generateResume.isPending}>
+        <Button onClick={handleOpenGenerate} isLoading={generateResume.isPending}>
           <Sparkles className="h-4 w-4" />
           Gerar Curriculo
         </Button>
@@ -202,6 +218,64 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
           </Card>
         </div>
       </div>
+
+      {/* Modal para selecionar currículo base */}
+      <Modal
+        open={showResumeModal}
+        onClose={() => setShowResumeModal(false)}
+        title="Selecionar Curriculo Base"
+      >
+        <div className="space-y-3">
+          {resumes.length === 0 ? (
+            <div className="text-center py-8 text-slate-400">
+              <p>Nenhum curriculo cadastrado.</p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-3"
+                onClick={() => router.push('/resumes/new')}
+              >
+                Criar curriculo
+              </Button>
+            </div>
+          ) : (
+            resumes.map((resume) => (
+              <label
+                key={resume.id}
+                className={`flex items-center gap-3 p-4 rounded-lg border cursor-pointer transition-colors ${
+                  selectedResumeId === resume.id
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="resume"
+                  value={resume.id}
+                  checked={selectedResumeId === resume.id}
+                  onChange={() => setSelectedResumeId(resume.id)}
+                  className="accent-blue-600"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium text-slate-900 truncate">{resume.title}</p>
+                    {resume.isDefault && <Badge variant="warning">Padrao</Badge>}
+                  </div>
+                </div>
+              </label>
+            ))
+          )}
+          <div className="flex justify-end gap-3 pt-4 border-t">
+            <Button variant="outline" onClick={() => setShowResumeModal(false)}>
+              Cancelar
+            </Button>
+            <Button onClick={handleGenerate} disabled={!selectedResumeId} isLoading={generateResume.isPending}>
+              <Sparkles className="h-4 w-4" />
+              Gerar Curriculo
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
