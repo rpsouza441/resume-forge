@@ -1,17 +1,15 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:15
     container_name: resumeforge-postgres
     environment:
-      POSTGRES_DB: resumeforge
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5432:5432"
+      POSTGRES_DB: ${POSTGRES_DB:-resumeforge}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - resumeforge_net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d resumeforge"]
       interval: 10s
@@ -30,9 +28,13 @@ services:
     environment:
       DATABASE_HOST: postgres
       DATABASE_PORT: 5432
-      DATABASE_NAME: resumeforge
+      DATABASE_NAME: ${POSTGRES_DB:-resumeforge}
       DATABASE_USERNAME: ${DATABASE_USERNAME:-postgres}
       DATABASE_PASSWORD: ${DATABASE_PASSWORD:-postgres}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-resumeforge}
+      SPRING_DATASOURCE_USERNAME: ${DATABASE_USERNAME:-postgres}
+      SPRING_DATASOURCE_PASSWORD: ${DATABASE_PASSWORD:-postgres}
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
       JWT_SECRET: ${JWT_SECRET:-your-256-bit-secret-key-here-change-in-production}
       AI_PROVIDER: ${AI_PROVIDER:-gemini}
       AI_API_KEY: ${AI_API_KEY:-your-api-key-here}
@@ -41,24 +43,52 @@ services:
       AI_TEMPERATURE: ${AI_TEMPERATURE:-0.3}
       AI_MAX_TOKENS: ${AI_MAX_TOKENS:-8192}
       SERVER_PORT: ${SERVER_PORT:-8080}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:3021,http://192.168.22.245:3021}
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev}
-    ports:
-      - "8080:8080"
+    expose:
+      - "8080"
+    networks:
+      - resumeforge_net
     restart: unless-stopped
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3080}
     container_name: resumeforge-frontend
     depends_on:
       - backend
     environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080}
+      PORT: ${FRONTEND_PORT:-3000}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3080}
+    expose:
+      - "${FRONTEND_PORT:-3000}"
+    networks:
+      - resumeforge_net
+    restart: unless-stopped
+
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    container_name: resumeforge-nginx
+    depends_on:
+      - frontend
+      - backend
     ports:
-      - "3000:3000"
+      - "${FRONTEND_HOST_PORT:-3021}:80"
+    networks:
+      - resumeforge_net
     restart: unless-stopped
 
 volumes:
   postgres_data:
+
+networks:
+  resumeforge_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.250.100.0/24

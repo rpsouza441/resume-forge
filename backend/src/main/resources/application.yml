@@ -89,8 +89,3 @@ logging:
     org.springframework.security: INFO
     org.hibernate.SQL: WARN
     org.hibernate.type.descriptor.sql.BasicBinder: WARN
-
-# =============================================================================
-# Profile Activation
-# =============================================================================
-spring.config.activate.on-profile: base
