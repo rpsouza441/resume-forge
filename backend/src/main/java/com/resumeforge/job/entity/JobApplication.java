@@ -87,10 +87,12 @@ public class JobApplication {
         createdAt = OffsetDateTime.now();
         updatedAt = OffsetDateTime.now();
         statusChangedAt = OffsetDateTime.now();
+        if (generatedCount == null) generatedCount = 0;
     }
 
     @PreUpdate
     protected void onUpdate() {
         updatedAt = OffsetDateTime.now();
+        if (generatedCount == null) generatedCount = 0;
     }
 }

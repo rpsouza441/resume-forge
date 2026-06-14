@@ -20,7 +20,7 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
-import org.hibernate.annotations.JdbcType;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import java.time.OffsetDateTime;
@@ -64,7 +64,7 @@ public class ProcessingLog {
     @Column(nullable = false, columnDefinition = "TEXT")
     private String message;
 
-    @JdbcType(SqlTypes.JSON)
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "context_data", nullable = false, columnDefinition = "jsonb")
     private Map<String, Object> contextData = new HashMap<>();
 

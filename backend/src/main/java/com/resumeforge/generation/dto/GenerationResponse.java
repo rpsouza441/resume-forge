@@ -23,7 +23,7 @@ public class GenerationResponse {
     private String status;
     private String contentMarkdown;
     private String contentText;
-    private String contentJsonb;
+    private Map<String, Object> contentJsonb;
     private AnalysisDto analysis;
     private AiRunDto aiRun;
     private OffsetDateTime createdAt;

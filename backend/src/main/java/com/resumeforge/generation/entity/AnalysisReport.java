@@ -20,7 +20,7 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
-import org.hibernate.annotations.JdbcType;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
@@ -59,19 +59,19 @@ public class AnalysisReport {
     @Column(name = "ats_compatibility_score", precision = 5, scale = 2)
     private BigDecimal atsCompatibilityScore;
 
-    @JdbcType(SqlTypes.JSON)
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "dimension_scores", nullable = false, columnDefinition = "jsonb")
     private Map<String, Object> dimensionScores = new HashMap<>();
 
-    @JdbcType(SqlTypes.JSON)
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(nullable = false, columnDefinition = "jsonb")
     private Map<String, Object> findings = new HashMap<>();
 
-    @JdbcType(SqlTypes.JSON)
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(nullable = false, columnDefinition = "jsonb")
     private Map<String, Object> recommendations = new HashMap<>();
 
-    @JdbcType(SqlTypes.JSON)
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "analyzed_fields", nullable = false, columnDefinition = "jsonb")
     private Map<String, Object> analyzedFields = new HashMap<>();
 

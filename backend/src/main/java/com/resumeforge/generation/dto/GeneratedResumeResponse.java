@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.time.OffsetDateTime;
+import java.util.Map;
 import java.util.UUID;
 
 @Data
@@ -23,7 +24,7 @@ public class GeneratedResumeResponse {
     private String status;
     private String contentMarkdown;
     private String contentText;
-    private String contentJsonb;
+    private Map<String, Object> contentJsonb;
     private Integer adherenceScore;
     private String aiProvider;
     private String aiModel;

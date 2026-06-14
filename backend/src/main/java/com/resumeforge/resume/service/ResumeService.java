@@ -1,7 +1,5 @@
 package com.resumeforge.resume.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.resumeforge.exception.ConflictException;
 import com.resumeforge.exception.ResourceNotFoundException;
@@ -44,7 +42,7 @@ public class ResumeService {
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", userId));
 
         String contentText = stripMarkdown(request.getContentMarkdown());
-        String contentJsonb = serializeJsonb(request.getContentJsonb());
+        Map<String, Object> contentJsonb = normalizeJsonb(request.getContentJsonb());
 
         boolean isFirst = resumeRepository.countByUserIdAndDeletedAtIsNull(userId) == 0;
         boolean isDefault = Boolean.TRUE.equals(request.getIsDefault()) || isFirst;
@@ -106,7 +104,7 @@ public class ResumeService {
             resume.setContentText(stripMarkdown(request.getContentMarkdown()));
         }
         if (request.getContentJsonb() != null) {
-            resume.setContentJsonb(serializeJsonb(request.getContentJsonb()));
+            resume.setContentJsonb(normalizeJsonb(request.getContentJsonb()));
         }
         if (request.getIsDefault() != null && request.getIsDefault()) {
             // Clear other defaults
@@ -180,7 +178,7 @@ public class ResumeService {
                 .title(resume.getTitle())
                 .contentText(resume.getContentText())
                 .contentMarkdown(resume.getContentMarkdown())
-                .contentJsonb(deserializeJsonb(resume.getContentJsonb()))
+                .contentJsonb(normalizeJsonb(resume.getContentJsonb()))
                 .isDefault(resume.getIsDefault())
                 .createdAt(resume.getCreatedAt())
                 .updatedAt(resume.getUpdatedAt())
@@ -229,26 +227,11 @@ public class ResumeService {
         return text.trim();
     }
 
-    private String serializeJsonb(Map<String, Object> contentJsonb) {
+    private Map<String, Object> normalizeJsonb(Map<String, Object> contentJsonb) {
         if (contentJsonb == null || contentJsonb.isEmpty()) {
-            return "{}";
-        }
-        try {
-            return objectMapper.writeValueAsString(contentJsonb);
-        } catch (JsonProcessingException e) {
-            return "{}";
-        }
-    }
-
-    private Map<String, Object> deserializeJsonb(String jsonb) {
-        if (jsonb == null || jsonb.isBlank()) {
             return Map.of();
         }
-        try {
-            return objectMapper.readValue(jsonb, new TypeReference<Map<String, Object>>() {});
-        } catch (JsonProcessingException e) {
-            return Map.of();
-        }
+        return contentJsonb;
     }
 
     private org.springframework.data.jpa.domain.Specification<ResumeProfile> buildResumeSpecification(
@@ -259,7 +242,9 @@ public class ResumeService {
                     cb.equal(root.get("user").get("id"), userId));
             if (title != null && !title.isBlank()) {
                 predicates = cb.and(predicates,
-                        cb.like(cb.lower(root.get("title")), "%" + title.toLowerCase() + "%"));
+                        cb.like(cb.function("lower", String.class,
+                                cb.function("text", String.class, root.get("title"))),
+                                "%" + title.toLowerCase() + "%"));
             }
             if (isDefault != null) {
                 predicates = cb.and(predicates,

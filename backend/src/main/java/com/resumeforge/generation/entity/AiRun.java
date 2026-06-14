@@ -22,7 +22,7 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
-import org.hibernate.annotations.JdbcType;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
@@ -83,11 +83,11 @@ public class AiRun {
     @Column(name = "raw_response", columnDefinition = "TEXT")
     private String rawResponse;
 
-    @JdbcType(SqlTypes.JSON)
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "parsed_response", columnDefinition = "jsonb")
     private Map<String, Object> parsedResponse = new HashMap<>();
 
-    @JdbcType(SqlTypes.JSON)
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(nullable = false, columnDefinition = "jsonb")
     private Map<String, Object> context = new HashMap<>();
 

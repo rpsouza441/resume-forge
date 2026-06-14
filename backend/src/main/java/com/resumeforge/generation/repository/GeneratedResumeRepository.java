@@ -38,8 +38,8 @@ public interface GeneratedResumeRepository extends JpaRepository<GeneratedResume
     @Query("SELECT gr FROM GeneratedResume gr " +
            "LEFT JOIN gr.jobApplication ja " +
            "WHERE gr.resumeProfile.user.id = :userId AND gr.deletedAt IS NULL " +
-           "AND (:companyName IS NULL OR LOWER(ja.companyName) LIKE LOWER(CONCAT('%', :companyName, '%'))) " +
-           "AND (:jobTitle IS NULL OR LOWER(ja.jobTitle) LIKE LOWER(CONCAT('%', :jobTitle, '%'))) " +
+           "AND (:companyName IS NULL OR LOWER(COALESCE(ja.companyName, '')) LIKE LOWER(CONCAT('%', :companyName, '%'))) " +
+           "AND (:jobTitle IS NULL OR LOWER(COALESCE(ja.jobTitle, '')) LIKE LOWER(CONCAT('%', :jobTitle, '%'))) " +
            "AND (:resumeProfileId IS NULL OR gr.resumeProfile.id = :resumeProfileId) " +
            "AND (:dateFrom IS NULL OR gr.createdAt >= :dateFrom) " +
            "AND (:dateTo IS NULL OR gr.createdAt <= :dateTo) " +

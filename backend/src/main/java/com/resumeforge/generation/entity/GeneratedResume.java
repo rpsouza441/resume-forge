@@ -2,7 +2,7 @@ package com.resumeforge.generation.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
-import org.hibernate.annotations.JdbcType;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.Where;
 import org.hibernate.type.SqlTypes;
 
@@ -49,7 +49,7 @@ public class GeneratedResume {
     @Column(name = "content_markdown", nullable = false, columnDefinition = "TEXT")
     private String contentMarkdown;
 
-    @JdbcType(SqlTypes.JSON)
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "content_jsonb", nullable = false, columnDefinition = "jsonb")
     private Map<String, Object> contentJsonb = new HashMap<>();
 
