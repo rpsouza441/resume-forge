@@ -112,6 +112,7 @@ public class DocxGenerationService {
 
         // 8. Convert markdown to DOCX
         XWPFDocument document;
+        String rendererUsed = "UNKNOWN";
         try {
             // Tentar usar estrutura primeiro
             Map<String, Object> contentJsonb = generatedResume.getContentJsonb();
@@ -123,16 +124,28 @@ public class DocxGenerationService {
                 StructuredDocxConverter.ResumeStructure structure = StructuredDocxConverter.fromJson(optimized);
                 StructuredDocxConverter.ResumeHeader header = extractHeader(resumeProfile);
 
+                // Log diagnóstico
+                log.info("DOCX_RENDERER=STRUCTURED schemaVersion=2 hasHeader=true experiences={} skillGroups={} projects={} trainings={} markdownFallback=false",
+                        structure.experience() != null ? structure.experience().size() : 0,
+                        structure.skills() != null ? structure.skills().size() : 0,
+                        structure.projects() != null ? structure.projects().size() : 0,
+                        structure.trainings() != null ? structure.trainings().size() : 0);
+
                 document = structuredConverter.createDocument(header, structure);
+                rendererUsed = "STRUCTURED";
                 log.info("DOCX generated from structured data for generatedResumeId={}", generatedResumeId);
             } else {
                 // Fallback para markdown (temporario)
+                log.warn("DOCX_RENDERER=MARKDOWN markdownFallback=true - optimized_resume not found in contentJsonb");
                 document = converter.convert(markdown);
+                rendererUsed = "MARKDOWN";
                 log.warn("DOCX fallback to markdown for generatedResumeId={}", generatedResumeId);
             }
         } catch (Exception e) {
             // Fallback final
+            log.error("DOCX_RENDERER=ERROR markdownFallback=true - exception: {}", e.getMessage());
             document = converter.convert(markdown);
+            rendererUsed = "MARKDOWN_ERROR";
             log.error("DOCX conversion failed, using markdown fallback for generatedResumeId={}", generatedResumeId, e);
         }
 
