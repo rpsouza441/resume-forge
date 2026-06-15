@@ -1,129 +1,151 @@
----
-name: CONTEXT
-description: Phase 1 context - DOCX Fix discussion decisions
-phase: 01-docx-fix
----
+# Phase 1: DOCX Fix - Context
 
-# CONTEXT — Phase 1: DOCX Fix
+**Gathered:** 2026-06-15
+**Status:** Ready for planning
 
-**Phase:** 01-docx-fix  
-**Date:** 2026-06-15
+## Phase Boundary
 
----
+Corrigir o `StructuredDocxConverter` para gerar DOCX visualmente profissional: header com nome/contatos, fontes hierárquicas corretas (10-11pt corpo), bullets OOXML reais, margens densas, sem Markdown residual, máximo 2 páginas.
 
-## Domain
+## Requirements (locked via SPEC.md)
 
-Corrigir o renderer estruturado `StructuredDocxConverter` para gerar DOCX visualmente correto, comparável ao `bom-exemplo.docx`.
+**8 requirements are locked.** See `01-docx-fix-SPEC.md` for full requirements, boundaries, and acceptance criteria.
 
----
+Downstream agents MUST read `01-docx-fix-SPEC.md` before planning or implementing. Requirements are not duplicated here.
 
-## Canonical refs
+**In scope (from SPEC.md):**
+- StructuredDocxConverter.java — correções de formatação
+- DocxGenerationService.java — passagem de dados de header
+- Testes estruturais — validação de formatação
+- Sanitização de campos estruturados
 
-- `backend/src/main/java/com/resumeforge/export/converter/StructuredDocxConverter.java`
-- `backend/src/main/java/com/resumeforge/export/converter/MarkdownToDocxConverter.java`
-- `backend/src/main/java/com/resumeforge/export/service/DocxGenerationService.java`
-- `docs/resume-generation-v2/`
-- `bom-exemplo.docx` (referência visual apenas)
+**Out of scope (from SPEC.md):**
+- Alterar system prompt da IA
+- Copiar conteúdo do bom-exemplo.docx
+- Criar novos dados de currículo
+- Frontend de exibição
+- Geração de markdown
+- Alterar schema JSON da resposta IA
 
----
+## Implementation Decisions
 
-## Decisions
+### Font Sizes (CRÍTICO - primeira execução falhou)
+- **D-01:** Nome: 32-36 half-points (16-18 pt) — `run.setFontSize(32)`
+- **D-02:** Título profissional: 21-23 half-points (10.5-11.5 pt) — `run.setFontSize(22)`
+- **D-03:** Contatos: 18-20 half-points (9-10 pt) — `run.setFontSize(18)`
+- **D-04:** Títulos de seção: 23-26 half-points (11.5-13 pt) — `run.setFontSize(24)`
+- **D-05:** Corpo: 20-22 half-points (10-11 pt) — `run.setFontSize(20)` ou `21`
+- **D-06:** Período: 18-20 half-points (9-10 pt) — `run.setFontSize(18)`
 
-### DOCX Renderer Selection
-- Confirmar se `StructuredDocxConverter` foi selecionado
-- Log diagnóstico obrigatório antes de qualquer correção
-- Se fallback foi usado, identificar motivo exato
+⚠️ **ERRO ANTERIOR:** `run.setFontSize(21)` criava 21pt, não 10.5pt. O código deve usar half-points corretos.
 
-### Font Sizes (Apache POI Half-Points)
-- Nome: 32-36 half-points (16-18 pt)
-- Título profissional: 21-23 half-points (10.5-11.5 pt)
-- Contatos: 18-20 half-points (9-10 pt)
-- Títulos de seção: 23-26 half-points (11.5-13 pt)
-- Corpo: 20-22 half-points (10-11 pt)
-- Cargo/empresa: 20-22 half-points (10-11 pt)
-- Período: 18-20 half-points (9-10 pt)
-- Skills compactas: 19-21 half-points (9.5-10.5 pt)
+### Margins (CRÍTICO - primeira execução falhou)
+- **D-07:** Superior/Inferior: 1.5-1.8cm → ~850-1020 twips
+- **D-08:** Esquerda/Direita: 1.6-1.9cm → ~907-1076 twips
+- **D-09:** Implementar com `CTPageMar` via `sectPr.getPgMar()`
 
-### Header Structure
-```
-NOME COMPLETO
-Título profissional
-Cidade/Estado | email | LinkedIn | GitHub | site
-────────────────────────────────────────────
-```
-- Header local (não nativo Word - ATS pode ignorar)
-- Nome em destaque (16-18 pt)
-- Contatos omitidos se ausentes
+⚠️ **ERRO ANTERIOR:** `setDocumentMargins()` estava vazio, sem `CTPageMar`.
+
+### Header Structure (CRÍTICO - primeira execução falhou)
+- **D-10:** Header local (não nativo Word — ATS pode ignorar)
+- **D-11:** Estrutura:
+  ```
+  NOME COMPLETO (32-36 half-points, bold)
+  Título profissional (21-23 half-points)
+  Cidade | email | LinkedIn | GitHub | site (18-20 half-points)
+  ──────────────────────────────────────── (border line)
+  ```
+- **D-12:** Omitir contatos ausentes
+- **D-13:** Separador com `paragraph.setBorderBottom(Borders.SINGLE)`
+
+⚠️ **ERRO ANTERIOR:** Documento iniciava em "Resumo Profissional" sem header.
+
+### Bullets OOXML (IMPLEMENTAR CORRETAMENTE)
+- **D-14:** Usar `document.createNumbering()` com `XWPFNumbering`
+- **D-15:** Cada bullet: `paragraph.setNumId(numId)` via numbering definition
+- **D-16:** Não simular com `-`, `•` ou caracteres especiais
 
 ### Experience Structure
-```
-Empresa | Localidade
-Cargo | Período
-• Highlight 1
-• Highlight 2
-```
--keepWithNext no cargo
-- Bullets reais OOXML
-- Período em itálico, menor
+- **D-17:** Estrutura:
+  ```
+  Empresa | Localidade (bold)
+  Cargo | Período (bold/italic)
+  • Highlight 1 (bullet real)
+  • Highlight 2 (bullet real)
+  ```
+- **D-18:** `keepWithNext` no cargo para evitar quebra de página
+- **D-19:** Período em itálico, menor que cargo
 
-### Margins
-- Superior: 1.5-1.8 cm
-- Inferior: 1.5-1.8 cm
-- Esquerda: 1.6-1.9 cm
-- Direita: 1.6-1.9 cm
+### Markdown Sanitization (CRÍTICO - primeira execução falhou)
+- **D-20:** Remover `**`, `###`, `#` de campos estruturados ANTES de criar runs
+- **D-21:** Validação pós-resposta da IA
+- **D-22:** Manter asteriscos de dados técnicos (C++, Bash*)
 
-### Spacing
-- Linha: simples ou 1.05
-- spaceAfter corpo: 2-4 pt
-- spaceBefore seções: 5-8 pt
-- Sem linhas vazias artificiais
-
-### Markdown Sanitization
-- Remover `**`, `###`, `#` de campos estruturados
-- Manter asteriscos de dados técnicos (C++, Bash*)
-- Validação pós-resposta da IA
+⚠️ **ERRO ANTERIOR:** "**Infraestrutura:**" visível no DOCX.
 
 ### Named Styles
-- `ResumeName`
-- `ResumeProfessionalTitle`
-- `ResumeContact`
-- `ResumeSectionHeading`
-- `ResumeSummary`
-- `ResumeJobHeader`
-- `ResumeJobPeriod`
-- `ResumeBullet`
-- `ResumeSkill`
-- `ResumeCompactItem`
+- **D-23:** Criar estilos XWPFStyle:
+  - `ResumeName` — 16-18pt bold
+  - `ResumeSectionHeading` — 11.5-13pt bold
+  - `ResumeBullet` — 10-11pt
+  - `ResumeJobPeriod` — 9-10pt italic
 
----
+### Spacing
+- **D-24:** Linha: simples ou 1.05
+- **D-25:** `spaceAfter` corpo: 2-4 pt
+- **D-26:** `spaceBefore` seções: 5-8 pt
+- **D-27:** Sem linhas vazias artificiais
 
-## Boundaries
+## Canonical References
 
-- Não copiar conteúdo do bom-exemplo.docx
-- Não usar fonte < 9.5 pt
-- Não usar tabelas complexas
-- Não usar Markdown como entrada
-- Máximo 2 páginas para currículo padrão
+**Downstream agents MUST read these before planning or implementing.**
 
----
+### Phase Specs
+- `.planning/phases/01-docx-fix/01-docx-fix-SPEC.md` — **Locked requirements — MUST read**
+- `.planning/phases/01-docx-fix/01-RESEARCH.md` — Technical research with bug findings
 
-## Test Requirements
+### Source Code
+- `backend/src/main/java/com/resumeforge/export/converter/StructuredDocxConverter.java` — Main converter to fix
+- `backend/src/main/java/com/resumeforge/export/service/DocxGenerationService.java` — Service layer
 
-Testes estruturais devem validar:
-1. Nome no início
-2. Título profissional presente
-3. Contatos quando existirem
-4. Sem `**`, `###`, `{HEADER}`
-5. Fonte corpo ≤ 11 pt
-6. Bullets reais OOXML
-7. Experiências com header separado dos highlights
-8. Seções esperadas presentes
-9. Sem fallback Markdown
+### QA Report (Issue Analysis)
+- QA audit identified critical failures in first implementation:
+  - Font sizes inverted (21pt body instead of 10.5pt)
+  - Margins not applied (setDocumentMargins empty)
+  - Header missing (name/title/contacts not generated)
+  - Markdown residual (`**` visible in document)
+  - No real OOXML bullets (text paragraphs, not numPr)
 
----
+## Existing Code Insights
+
+### Reusable Assets
+- `StructuredDocxConverter.java` — Base implementation exists, needs fixes
+- `DocxGenerationService.java` — Service layer, passes data to converter
+
+### Established Patterns
+- Apache POI 5.3.0 API (verified in pom.xml)
+- Half-points for font sizes: `setFontSize(21)` = 10.5pt
+- Twips for margins: 1cm ≈ 567 twips
+
+### Integration Points
+- `DocxGenerationService.generateDocx()` → `StructuredDocxConverter.convert()`
+- Resume profile JSON → Converter → DOCX output
+
+## Specific Ideas
+
+- Header deve vir de `profile` e `contacts` do JSON estruturado
+- Não é necessário enviar dados pessoais para a IA — inserir localmente
+- Comparar com `bom-exemplo.docx` para referência visual (não copiar conteúdo)
 
 ## Deferred Ideas
 
 - Lovable/Stitch para redesign visual (UX Improvement - Phase 3)
 - Multi-language support
 - WebSocket para real-time updates
+- Frontend de exibição do currículo (problema separado)
+
+---
+
+*Phase: 01-docx-fix*
+*Context gathered: 2026-06-15*
+*Updated after QA audit — first implementation failed*
