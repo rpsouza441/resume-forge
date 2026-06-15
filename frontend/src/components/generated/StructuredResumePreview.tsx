@@ -7,6 +7,27 @@ import { Mail, Phone, Linkedin, Github, MapPin } from 'lucide-react';
 // ============================================
 
 export interface OptimizedResume {
+  // For nested structure: optimized_resume.sections.experience, etc.
+  sections?: {
+    professional_title?: string;
+    professional_summary?: string;
+    skills?: Array<{ category: string; items: string[] }>;
+    experience?: Array<{
+      company: string;
+      official_role: string;
+      location?: string;
+      start_date?: string;
+      end_date?: string;
+      highlights?: string[];
+    }>;
+    previous_experience_summary?: string[];
+    projects?: Array<{ name: string; description?: string; technologies?: string[] }>;
+    education?: Array<{ institution: string; degree: string; period?: string }>;
+    certifications?: Array<{ name: string; issuer?: string; date?: string }>;
+    trainings?: Array<{ name: string; issuer?: string; date?: string }>;
+    languages?: Array<{ language: string; level?: string }>;
+  };
+  // Flat structure (legacy)
   professional_title?: string;
   professional_summary?: string;
   skills?: Array<{ category: string; items: string[] }>;
