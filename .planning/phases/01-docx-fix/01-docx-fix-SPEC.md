@@ -1,235 +1,139 @@
----
-name: SPEC
-description: SPEC for DOCX Structured Renderer Fix
-phase: 01-docx-fix
-status: draft
----
+# Phase 1: DOCX Fix — Specification
 
-# SPEC: DOCX Structured Renderer Fix
+**Created:** 2026-06-15
+**Updated:** 2026-06-15
+**Ambiguity score:** 0.15 (gate: ≤ 0.20)
+**Requirements:** 8 locked
 
-**Phase:** 01-docx-fix  
-**Date:** 2026-06-15  
-**Status:** Draft
+## Goal
 
----
+Corrigir o `StructuredDocxConverter` para gerar DOCX visualmente profissional: header com nome/contatos, fontes hierárquicas corretas (10-11pt corpo), bullets OOXML reais, margens densas, sem Markdown residual, máximo 2 páginas.
 
-## Problema Atual
+## Background
 
-O `StructuredDocxConverter` foi implementado mas o DOCX gerado está visualmente incorreto:
+O `StructuredDocxConverter` foi implementado mas o DOCX gerado está visualmente incorreto conforme auditoria detalhada:
 
-| Problema | Detalhamento |
-|----------|--------------|
-| Fontes 20-21pt | Corpo maior que títulos (invertido) |
-| Header ausente | Nome, título, contatos não aparecem |
-| Markdown residual | `**`, `###` visíveis no documento |
-| Sem bullets reais | Simulado com `-` e `•` em texto |
-| 3 páginas | Para pouco conteúdo (densidade ruim) |
-| Normal style | Todos os parágrafos sem estilo |
-| Experiências ruins | Cargo\|Empresa\|Período em parágrafo único |
+| Problema | Severidade | Detalhamento |
+|----------|------------|--------------|
+| Fontes 21pt corpo vs 10-11pt | 🔴 Crítico | run.setFontSize(21) = 21pt, não 10.5pt |
+| Margens 2.5cm vs 1.6-1.8cm | 🔴 Crítico | setDocumentMargins() vazio |
+| Header ausente | 🔴 Crítico | Nome, título, contatos não aparecem |
+| Markdown residual `**` | 🔴 Crítico | Asteriscos visíveis no documento |
+| Sem bullets reais | 🟡 Médio | Parágrafos comuns, não OOXML numPr |
+| Sem estilos nomeados | 🟡 Médio | Tudo estilo "Normal" |
+| 3 páginas | 🟡 Médio | Excesso de fonte + margens |
 
----
+O documento atual contém Resumo, Habilidades, Experiências, Formação e Certificações, mas:
+- Começa direto na seção "Resumo Profissional" sem header pessoal
+- Experiências em parágrafo único: "Cargo | Empresa Período"
+- Habilidades com Markdown: "**Infraestrutura:** Windows Server..."
+- 26 parágrafos, nenhuma tabela, nenhuma lista real
+- Margens ~2.5cm em todos os lados
 
-## Auditoria Exigida
+## Requirements
 
-### Etapa 1: Confirmar Qual Conversor Foi Usado
+1. **Header estruturado**: Nome, título e contatos devem aparecer no início do documento.
+   - Current: Documento começa em "Resumo Profissional" — header ausente
+   - Target: Início do documento: NOME (16-18pt bold) → Título (10.5-11.5pt) → Contatos (9-10pt) → Separador visual
+   - Acceptance: DOCX contém parágrafos com nome, título, contatos antes do Resumo. Separador visual (border line) presente.
 
-Adicionar diagnóstico temporário para confirmar:
-- Se `StructuredDocxConverter` foi selecionado
-- Se houve fallback para `MarkdownToDocxConverter`
-- Versão do renderer
-- Presença das seções estruturadas
-- Quantidade de experiências/skills/projetos/treinamentos
-- Presença do header
-- Caminho lógico utilizado
+2. **Fontes hierárquicas corretas**: Corpo 10-11pt, títulos de seção maiores.
+   - Current: run.setFontSize(21) define 21pt (invertido — corpo maior que títulos)
+   - Target: Corpo = 10-11pt, Seções = 11.5-13pt, Nome = 16-18pt. Half-points corretos no Apache POI.
+   - Acceptance: Inspect DOCX internamente — corpo ≤ 11pt, títulos > corpo. Teste estrutural verifica hierarchy.
 
-**Log de diagnóstico:**
-```text
-DOCX_RENDERER=STRUCTURED
-schemaVersion=2
-hasHeader=true
-experiences=3
-skillGroups=5
-projects=2
-trainings=4
-markdownFallback=false
-```
+3. **Margens densas**: 1.5-1.8cm em todos os lados.
+   - Current: ~2.5cm (setDocumentMargins() cria sectPr vazio sem CTPageMar)
+   - Target: Superior/Inferior: 1.5-1.8cm (~850-1020 twips), Esquerda/Direita: 1.6-1.9cm (~907-1076 twips)
+   - Acceptance: CTPageMar com valores corretos. DOCX fits em 2 páginas.
 
-### Etapa 2: Auditar StructuredDocxConverter
+4. **Bullets reais OOXML**: Listas com numeração nativa Word.
+   - Current: Texto com "• " no início do parágrafo — não é bullet real
+   - Target: Cada highlight como XWPFParagraph com numPr configurado via numbering definition
+   - Acceptance: DOCX internamente contém numPr em paragraphs de highlights. Teste valida bulletNumId presente.
 
-Revisar:
-- Constantes de fonte
-- Margens
-- Estilos
-- Espaçamento
-- Alinhamento
--Indentação
-- Criação de bullets
-- Criação do cabeçalho
-- Criação de títulos
-- Tratamento de Markdown residual
-- Controle de páginas
-- Lógica de empresa/cargo/período
-- Tratamento de campos ausentes
+5. **Sem Markdown residual**: Campos estruturados sem `**`, `###`, `#`.
+   - Current: "**Infraestrutura:**", "**Bacharelado em Sistemas de Informação**" visíveis
+   - Target: sanitizeMarkdown remove todos os marcadores Markdown dos campos antes de criar runs
+   - Acceptance: DOCX não contém literais `**`, `###`, `#`. Teste valida ausência de Markdown.
 
-### Etapa 3: Verificar Apache POI Half-Points
+6. **Estilos nomeados**: Hierarquia visual via estilos Word.
+   - Current: Todos parágrafos estilo "Normal" — sem diferenciação
+   - Target: Criar estilos XWPFStyle com nomes: ResumeName, ResumeSectionHeading, ResumeBullet, etc.
+   - Acceptance: DOCX contém estilos nomeados (verificável via XML). Hierarquia visual consistente.
 
-**Hipótese prioritária:** Valores como `20` e `21` usados como se fossem half-points.
+7. **Experiências organizadas**: Cargo|Empresa → Período → Bullets.
+   - Current: "Cargo | Empresa Período" em único parágrafo, sem separação
+   - Target: "Empresa | Local" + "Cargo | Período" em parágrafos separados, bulleted highlights abaixo
+   - Acceptance: DOCX mostra estrutura: Header → Bullets. keepWithNext no header evita quebra.
 
-No Apache POI:
-- `run.setFontSize(21)` = 21 pt (NÃO 10.5 pt)
-- Para 10.5 pt: `run.setFontSize(21)` (21 half-points)
-- Para 11 pt: `run.setFontSize(22)` (22 half-points)
+8. **Densidade 2 páginas**: Curriculums curtos em máximo 2 páginas.
+   - Current: ~3 páginas com pouco conteúdo
+   - Target: Fontes compactas (10-11pt) + margens densas + espaçamento mínimo = 1-2 páginas
+   - Acceptance: Documento de referência gera 2 páginas. QA visual confirma densidade.
 
-Verificar qual API está sendo usada no projeto.
+## Boundaries
 
----
+**In scope:**
+- StructuredDocxConverter.java — correções de formatação
+- DocxGenerationService.java — passagem de dados de header
+- Testes estruturais — validação de formatação
+- Sanitização de campos estruturados
 
-## Solução: Estilos Nomeados
+**Out of scope:**
+- Alterar system prompt da IA — isso é fase separada
+- Copiar conteúdo do bom-exemplo.docx — apenas referência visual
+- Criar novos dados de currículo — usar dados existentes
+- Frontend de exibição — problema separado
+- Geração de markdown — já existe
+- Alterar schema JSON da resposta IA
 
-Definir estilos no documento:
+## Constraints
 
-| Estilo | Tamanho | Negrito | Propósito |
-|--------|---------|---------|-----------|
-| `ResumeName` | 16-18 pt | Sim | Nome do candidato |
-| `ResumeProfessionalTitle` | 10.5-11.5 pt | Não | Título profissional |
-| `ResumeContact` | 9-10 pt | Não | Email, LinkedIn, etc |
-| `ResumeSectionHeading` | 11.5-13 pt | Sim | Títulos de seção |
-| `ResumeSummary` | 10-11 pt | Não | Resumo profissional |
-| `ResumeJobHeader` | 10-11 pt | Sim | Cargo e empresa |
-| `ResumeJobPeriod` | 9-10 pt | Não | Período (itálico) |
-| `ResumeBullet` | 10-11 pt | Não | Highlights |
-| `ResumeSkill` | 9.5-10.5 pt | Não | Skills por categoria |
-| `ResumeCompactItem` | 9.5-10.5 pt | Não | Projetos, formação |
+- Apache POI 5.3.0 (verificado em pom.xml)
+- Half-points: setFontSize(21) = 10.5pt, setFontSize(22) = 11pt
+- Não usar tabelas complexas (ATS pode ignorar)
+- Não usar múltiplas colunas
+- Não usar fonte < 9.5pt
+- Header dentro do body (não header nativo Word — ATS pode ignorar)
+- Twips para margens: 1cm ≈ 567 twips
 
----
+## Acceptance Criteria
 
-## Solução: Header Estruturado
-
-**Local:** Início do documento (não header nativo Word - ATS pode ignorar)
-
-**Estrutura visual:**
-```
-NOME COMPLETO
-Título profissional direcionado
-Cidade/Estado | email | LinkedIn | GitHub | site
-────────────────────────────────────────────
-```
-
-**Regras:**
-- Nome em destaque (16-18 pt)
-- Título em linha própria
-- Contatos em tamanho menor (9-10 pt)
-- Omitir contatos ausentes
-- Separador visual no final
-
----
-
-## Solução: Experiências Corretas
-
-**Estrutura correta:**
-```
-Empresa | Localidade
-Cargo | Período
-• Highlight 1
-• Highlight 2
-• Highlight 3
-```
-
-**Regras:**
-- Empresa e/ou cargo em negrito
-- Período visualmente secundário
-- Cada highlight como bullet real OOXML
-- `keepWithNext` no cabeçalho da experiência
-- Indentação compacta
-
----
-
-## Solução: Bullets Reais OOXML
-
-Usar numeração OOXML nativa:
-```java
-NumberingDefinition numDef = document.createNumberingDefinition(...);
-XWAMRParaRpr pr = new XWAMRParaRpr();
-pr.setNumId(new BigInteger(numId));
-```
-
-Não simular com `-`, `•` ou caracteres especiais.
-
----
-
-## Solução: Margens e Densidade
-
-| Margem | Valor |
-|--------|-------|
-| Superior | 1.5-1.8 cm |
-| Inferior | 1.5-1.8 cm |
-| Esquerda | 1.6-1.9 cm |
-| Direita | 1.6-1.9 cm |
-
-**Espaçamento:**
-- Linha simples ou 1.05
-- `spaceAfter`: 2-4 pt (corpo)
-- `spaceBefore`: 5-8 pt (seções)
-- Sem linhas vazias artificiais
-
----
-
-## Solução: Sanitização de Markdown
-
-**Campos estruturados devem conter texto puro.**
-
-Validação pós-resposta:
-- Se campos contiverem `**`, `###`, `{HEADER}` → sanitizar
-- Não aplicar regex destrutiva sobre currículo inteiro
-- Remover apenas marcadores Markdown válidos
-
-**Exceção:** Asteriscos que façam parte de dados técnicos (ex: `C++`, `Bash*`)
-
----
-
-## Critérios de Aceite
-
-- [ ] Nome, título, contatos visíveis no header
-- [ ] Sem Markdown literal (`**`, `###`)
-- [ ] Corpo ≤ 11 pt
-- [ ] Títulos de seção > corpo
-- [ ] Bullets reais OOXML
-- [ ] Hierarquia visual consistente
-- [ ] ≤ 2 páginas para currículo padrão
-- [ ] Sem fallback Markdown
+- [ ] Header visível: Nome + Título + Contatos + Separador antes do Resumo
+- [ ] Corpo do DOCX usa fonte ≤ 11pt
+- [ ] Títulos de seção maiores que o corpo (hierarquia visual)
+- [ ] Margens: Superior/Inferior 1.5-1.8cm, Esquerda/Direita 1.6-1.9cm
+- [ ] Bullets são numeração OOXML real (numPr presente no XML)
+- [ ] DOCX não contém literais Markdown: `**`, `###`, `#`
+- [ ] Experiências organizadas: Header → Bullets (não parágrafo único)
+- [ ] Documento fit em 2 páginas para currículo de referência
+- [ ] Estilos nomeados presentes (ResumeName, ResumeSectionHeading, etc.)
+- [ ] Não há fallback para MarkdownToDocxConverter
 - [ ] Renderiza corretamente no Word e LibreOffice
-- [ ] Visualmente comparável ao bom-exemplo.docx
-- [ ] Passa nos testes estruturais
-- [ ] QA visual aprovado
+- [ ] QA visual aprovado por usuário
+
+## Ambiguity Report
+
+| Dimension          | Score | Min  | Status | Notes                              |
+|--------------------|-------|------|--------|------------------------------------|
+| Goal Clarity       | 0.90  | 0.75 | ✓      | 8 requisitos específicos           |
+| Boundary Clarity   | 0.85  | 0.70 | ✓      | Out of scope claro                |
+| Constraint Clarity | 0.90  | 0.65 | ✓      | Half-points, twips, libs definidos|
+| Acceptance Criteria| 0.85  | 0.70 | ✓      | 12 checkboxes pass/fail           |
+| **Ambiguity**      | 0.15  | ≤0.20| ✓      |                                   |
+
+## Interview Log
+
+| Round | Perspective     | Question summary              | Decision locked                    |
+|-------|----------------|-----------------------------|-----------------------------------|
+| 1     | Auditoria      | O que foi identificado?      | 8 problemas críticos documentados |
+| 2     | Simplifier     | Qual o mínimo viável?        | Header + Fontes + Bullets + 2pg  |
+| 3     | Boundary Keeper| O que NÃO é escopo?         | System prompt, frontend, AI schema |
+| 4     | Failure Analyst| O que quebra se não corrigir?| Currículo não usável profissional |
 
 ---
 
-## Restrições
-
-- ❌ Não alterar somente o system prompt
-- ❌ Não declarar sucesso apenas por compilação
-- ❌ Não copiar conteúdo do bom-exemplo.docx
-- ❌ Não remover informações para esconder paginação
-- ❌ Não usar fonte < 9.5 pt
-- ❌ Não usar tabelas complexas ou múltiplas colunas
-- ❌ Não usar Markdown como entrada do renderer
-- ❌ Não fazer commit
-- ❌ Não registrar PII nos logs
-
----
-
-## Arquivos a Modificar
-
-1. `backend/src/main/java/com/resumeforge/export/converter/StructuredDocxConverter.java`
-2. `backend/src/main/java/com/resumeforge/export/service/DocxGenerationService.java`
-3. `backend/src/test/java/com/resumeforge/export/` (testes estruturais)
-4. `docs/resume-generation-v2/README.md` (atualizar status)
-
----
-
-## Referências
-
-- `backend/src/main/java/com/resumeforge/export/converter/StructuredDocxConverter.java`
-- `docs/resume-generation-v2/`
-- `bom-exemplo.docx` (referência visual)
-- Apache POI documentation (half-points)
+*Phase: 01-docx-fix*
+*Spec created: 2026-06-15*
+*Next step: /gsd-discuss-phase 1 — implementation decisions (how to build what's specified above)*
