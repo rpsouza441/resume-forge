@@ -140,7 +140,10 @@ export default function GeneratedDetailPage({ params }: { params: { id: string }
         <Card>
           <CardContent className="py-6">
             <StructuredResumePreview
-              resume={resume.contentJsonb?.optimized_resume}
+              // Handle both flat structure and nested "sections" structure
+              // AI prompt returns: optimized_resume.sections.experience, etc.
+              // But frontend expects: optimized_resume.experience at root level
+              resume={resume.contentJsonb?.optimized_resume?.sections ?? resume.contentJsonb?.optimized_resume}
               header={resume.header}
             />
           </CardContent>
