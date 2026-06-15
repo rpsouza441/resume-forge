@@ -23,7 +23,7 @@ description: Multi-phase project roadmap
 
 | Plan | Tasks | Status | Summary |
 |------|-------|--------|---------|
-| 01 | 3/3 | PENDING | Add named styles (ResumeName, ResumeSectionHeading, ResumeBullet) |
+| 01 | 3/3 | COMPLETED | Add diagnostic logging for DOCX converter selection and header extraction |
 
 ### Phase 2: AI Config Frontend (PLANNED)
 
