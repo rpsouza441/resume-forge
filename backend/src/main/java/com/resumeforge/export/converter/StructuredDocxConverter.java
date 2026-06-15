@@ -5,14 +5,23 @@ import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import org.apache.poi.xwpf.usermodel.XWPFRun;
 import org.apache.poi.xwpf.usermodel.XWPFAbstractNum;
 import org.apache.poi.xwpf.usermodel.XWPFNumbering;
+import org.apache.poi.xwpf.usermodel.Borders;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTSectPr;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTPageMar;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTP;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTPPr;
-import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTOnOff;
-import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTSpacing;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTInd;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTJc;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTSpacing;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTOnOff;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTAbstractNum;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTLvl;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTLevelText;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTNumFmt;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.STLineSpacingRule;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.STJc;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.STOnOff;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.STNumberFormat;
 import org.springframework.stereotype.Component;
 
 import java.math.BigInteger;
@@ -26,24 +35,40 @@ import java.util.Map;
 @Component
 public class StructuredDocxConverter {
 
-    // Font settings
+    // Font settings (all in half-points for Apache POI)
     private static final String DEFAULT_FONT = "Arial";
-    private static final String NAME_FONT_SIZE = "32"; // 16pt = 32 half-points
-    private static final String TITLE_FONT_SIZE = "22"; // 11pt = 22 half-points
-    private static final String CONTACT_FONT_SIZE = "18"; // 9pt = 18 half-points
-    private static final String SECTION_FONT_SIZE = "24"; // 12pt = 24 half-points
-    private static final String SUMMARY_FONT_SIZE = "21"; // 10.5pt = 21 half-points
-    private static final String EXPERIENCE_TITLE_FONT_SIZE = "21"; // 10.5pt = 21 half-points
-    private static final String BODY_FONT_SIZE = "21"; // 10.5pt = 21 half-points
-    private static final String PROJECT_FONT_SIZE = "21"; // 10.5pt = 21 half-points
 
-    // Margins in twips (1cm = 567 twips, 1.5cm = 850 twips)
-    private static final BigInteger MARGIN = new BigInteger("850");
+    // Numbering for bullets
+    private XWPFNumbering numbering;
+    private BigInteger bulletNumId;
+
+    // Font sizes (half-points: 21 = 10.5pt, 22 = 11pt, 24 = 12pt, 32 = 16pt)
+    private static final String NAME_FONT_SIZE = "32";          // 16pt - nome em destaque
+    private static final String TITLE_FONT_SIZE = "22";         // 11pt - título profissional
+    private static final String CONTACT_FONT_SIZE = "18";       // 9pt - contatos
+    private static final String SECTION_FONT_SIZE = "26";       // 13pt - títulos de seção (MAIOR que corpo)
+    private static final String SUMMARY_FONT_SIZE = "20";       // 10pt - resumo
+    private static final String EXPERIENCE_HEADER_FONT_SIZE = "22"; // 11pt - cargo/empresa (negrito)
+    private static final String PERIOD_FONT_SIZE = "18";        // 9pt - período (itálico, menor)
+    private static final String BODY_FONT_SIZE = "20";          // 10pt - corpo principal
+    private static final String PROJECT_FONT_SIZE = "20";       // 10pt - projetos
+    private static final String SKILL_CATEGORY_FONT_SIZE = "20"; // 10pt - categorias de skill
+    private static final String SKILL_ITEM_FONT_SIZE = "20";    // 10pt - itens de skill
+    private static final String COMPACT_FONT_SIZE = "19";       // 9.5pt - itens compactos
+
+    // Margins in twips (1cm = 567 twips)
+    // 1.5cm = 850 twips, 1.8cm = 1020 twips, 2.0cm = 1134 twips
+    private static final BigInteger MARGIN_TOP = new BigInteger("1020");    // 1.8cm
+    private static final BigInteger MARGIN_BOTTOM = new BigInteger("1020"); // 1.8cm
+    private static final BigInteger MARGIN_LEFT = new BigInteger("1134");   // 2.0cm
+    private static final BigInteger MARGIN_RIGHT = new BigInteger("1134");  // 2.0cm
 
     // Spacing (twips)
-    private static final int LINE_SPACING = 240; // 1.0 line spacing
-    private static final int SECTION_SPACING_BEFORE = 240;
-    private static final int SECTION_SPACING_AFTER = 120;
+    private static final int LINE_SPACING = 240;              // 1.0 line spacing
+    private static final int SECTION_SPACING_BEFORE = 160;    // ~8pt antes de seções
+    private static final int SECTION_SPACING_AFTER = 80;      // ~4pt após seções
+    private static final int BODY_SPACING_AFTER = 60;          // ~3pt após parágrafos de corpo
+    private static final int BULLET_INDENT = 720;              // 0.5 inch indent for bullets
 
     // Records for structured data
     public record ResumeStructure(
@@ -89,12 +114,15 @@ public class StructuredDocxConverter {
         validateInput(header, structure);
 
         XWPFDocument document = new XWPFDocument();
+        this.numbering = document.createNumbering();
+        initBulletNumbering();
         setDocumentMargins(document);
 
         // Header section
         createNameParagraph(document, header.name());
         createTitleParagraph(document, header.title());
         createContactParagraph(document, header);
+        createSeparatorLine(document);
 
         // Professional Summary
         if (structure.professionalSummary() != null && !structure.professionalSummary().isEmpty()) {
@@ -188,11 +216,66 @@ public class StructuredDocxConverter {
     }
 
     /**
-     * Sets document margins to 1.5cm on all sides.
+     * Sets document margins to 1.8cm top/bottom and 2.0cm left/right.
      */
     private void setDocumentMargins(XWPFDocument document) {
-        document.getDocument().getBody().addNewSectPr();
-        // Margins will be handled via page settings if needed
+        CTSectPr sectPr = document.getDocument().getBody().addNewSectPr();
+        CTPageMar pageMar = sectPr.addNewPgMar();
+        // 1cm = 567 twips, 1.8cm = 1020 twips, 2.0cm = 1134 twips
+        pageMar.setTop(MARGIN_TOP);       // 1020 = 1.8cm per D-04
+        pageMar.setBottom(MARGIN_BOTTOM); // 1020 = 1.8cm per D-04
+        pageMar.setLeft(MARGIN_LEFT);     // 1134 = 2.0cm per D-04
+        pageMar.setRight(MARGIN_RIGHT);   // 1134 = 2.0cm per D-04
+    }
+
+    /**
+     * Initializes OOXML bullet numbering definition.
+     * Creates a bullet list style with proper indentation.
+     */
+    private void initBulletNumbering() {
+        // Create abstract numbering for bullets
+        CTAbstractNum ctAbstractNum = CTAbstractNum.Factory.newInstance();
+        ctAbstractNum.setAbstractNumId(BigInteger.valueOf(1));
+
+        // Create level 0 (first level bullets)
+        CTLvl lvl = ctAbstractNum.addNewLvl();
+        lvl.setIlvl(0);
+
+        // Start message ID for the bullet
+        lvl.addNewStartMsgId(BigInteger.ZERO);
+
+        // Level text (empty means use bullet character from font)
+        CTLevelText levelText = lvl.addNewLevelText();
+        levelText.setVal("");
+
+        // Bullet format
+        CTNumFmt numFmt = lvl.addNewNumFmt();
+        numFmt.setVal(STNumberFormat.BULLET);
+
+        // Left alignment
+        lvl.addNewLvlJc().setVal(STJc.LEFT);
+
+        // Indentation settings
+        CTInd ind = lvl.addNewPPr().addNewInd();
+        ind.setLeft(BigInteger.valueOf(BULLET_INDENT));      // 720 twips
+        ind.setHanging(BigInteger.valueOf(360));              // Hanging indent
+
+        // Add abstract num to numbering
+        XWPFAbstractNum abstractNum = new XWPFAbstractNum(ctAbstractNum);
+        BigInteger abstractNumId = numbering.addAbstractNum(abstractNum);
+        numbering.addNum(abstractNumId);
+        this.bulletNumId = BigInteger.valueOf(1);
+    }
+
+    /**
+     * Creates a separator line after header.
+     */
+    private void createSeparatorLine(XWPFDocument document) {
+        XWPFParagraph paragraph = document.createParagraph();
+        // Use OOXML border instead of underscore characters
+        paragraph.setBorderBottom(Borders.SINGLE);
+        paragraph.setSpacingBefore(BigInteger.valueOf(80));   // ~4pt before
+        paragraph.setSpacingAfter(BigInteger.valueOf(160));  // ~8pt after
     }
 
     /**
@@ -283,10 +366,10 @@ public class StructuredDocxConverter {
     private void createSummaryParagraph(XWPFDocument document, String summary) {
         XWPFParagraph paragraph = document.createParagraph();
         XWPFRun run = paragraph.createRun();
-        run.setText(summary);
+        run.setText(sanitizeMarkdown(summary));
         run.setFontSize(Integer.parseInt(SUMMARY_FONT_SIZE));
         run.setFontFamily(DEFAULT_FONT);
-        setParagraphSpacing(paragraph, 0, 120);
+        setParagraphSpacing(paragraph, 0, BODY_SPACING_AFTER);
         setLeftAlignment(paragraph);
         setKeepTogether(paragraph, true);
     }
@@ -327,46 +410,55 @@ public class StructuredDocxConverter {
     }
 
     /**
-     * Creates a single experience entry.
+     * Creates a single experience entry with proper structure:
+     * - Cargo | Empresa (uma linha, negrito)
+     * - Período (linha separada, itálico, menor)
+     * - Highlights (bullets reais)
      */
     private void createExperienceEntry(XWPFDocument document, Experience exp) {
-        // Company, Role, Period
-        StringBuilder titleLine = new StringBuilder();
+        // Company and Role on same line (bold)
+        StringBuilder roleCompanyLine = new StringBuilder();
         if (exp.officialRole() != null && !exp.officialRole().isEmpty()) {
-            titleLine.append(exp.officialRole());
+            roleCompanyLine.append(exp.officialRole());
         }
         if (exp.company() != null && !exp.company().isEmpty()) {
-            if (titleLine.length() > 0) titleLine.append(", ");
-            titleLine.append(exp.company());
+            if (roleCompanyLine.length() > 0) roleCompanyLine.append(" | ");
+            roleCompanyLine.append(exp.company());
+        }
+
+        if (roleCompanyLine.length() > 0) {
+            XWPFParagraph rolePara = document.createParagraph();
+            XWPFRun roleRun = rolePara.createRun();
+            roleRun.setBold(true);
+            roleRun.setText(roleCompanyLine.toString());
+            roleRun.setFontSize(Integer.parseInt(EXPERIENCE_HEADER_FONT_SIZE));
+            roleRun.setFontFamily(DEFAULT_FONT);
+            setParagraphSpacing(rolePara, SECTION_SPACING_BEFORE, 40);
+            setLeftAlignment(rolePara);
+            setKeepWithNext(rolePara, true);
+        }
+
+        // Location if present (inline with period)
+        StringBuilder locationPeriodLine = new StringBuilder();
+        if (exp.location() != null && !exp.location().isEmpty()) {
+            locationPeriodLine.append(exp.location());
         }
 
         String period = formatPeriod(exp.startDate(), exp.endDate());
         if (period != null && !period.isEmpty()) {
-            if (titleLine.length() > 0) titleLine.append(" | ");
-            titleLine.append(period);
+            if (locationPeriodLine.length() > 0) locationPeriodLine.append(" | ");
+            locationPeriodLine.append(period);
         }
 
-        if (titleLine.length() > 0) {
-            XWPFParagraph titlePara = document.createParagraph();
-            XWPFRun titleRun = titlePara.createRun();
-            titleRun.setBold(true);
-            titleRun.setText(titleLine.toString());
-            titleRun.setFontSize(Integer.parseInt(EXPERIENCE_TITLE_FONT_SIZE));
-            titleRun.setFontFamily(DEFAULT_FONT);
-            setParagraphSpacing(titlePara, 0, 60);
-            setLeftAlignment(titlePara);
-            setKeepTogether(titlePara, true);
-        }
-
-        // Location if present
-        if (exp.location() != null && !exp.location().isEmpty()) {
-            XWPFParagraph locPara = document.createParagraph();
-            XWPFRun locRun = locPara.createRun();
-            locRun.setText(exp.location());
-            locRun.setFontSize(Integer.parseInt(BODY_FONT_SIZE));
-            locRun.setFontFamily(DEFAULT_FONT);
-            setParagraphSpacing(locPara, 0, 60);
-            setLeftAlignment(locPara);
+        if (locationPeriodLine.length() > 0) {
+            XWPFParagraph periodPara = document.createParagraph();
+            XWPFRun periodRun = periodPara.createRun();
+            periodRun.setItalic(true);
+            periodRun.setText(locationPeriodLine.toString());
+            periodRun.setFontSize(Integer.parseInt(PERIOD_FONT_SIZE));
+            periodRun.setFontFamily(DEFAULT_FONT);
+            setParagraphSpacing(periodPara, 0, BODY_SPACING_AFTER);
+            setLeftAlignment(periodPara);
         }
 
         // Highlights as bullet items
@@ -579,25 +671,21 @@ public class StructuredDocxConverter {
     }
 
     /**
-     * Creates a bullet item paragraph.
+     * Creates a bullet item paragraph with proper OOXML numbering.
      */
     private void createBulletItem(XWPFDocument document, String text) {
         XWPFParagraph paragraph = document.createParagraph();
         XWPFRun run = paragraph.createRun();
-        run.setText(text);
+        run.setText(sanitizeMarkdown(text));
         run.setFontSize(Integer.parseInt(BODY_FONT_SIZE));
         run.setFontFamily(DEFAULT_FONT);
-        setParagraphSpacing(paragraph, 0, 60);
+        setParagraphSpacing(paragraph, 0, BODY_SPACING_AFTER);
         setLeftAlignment(paragraph);
 
-        // Set as bullet list item
-        CTP ctp = paragraph.getCTP();
-        CTPPr ctpPr = ctp.isSetPPr() ? ctp.getPPr() : ctp.addNewPPr();
-        if (!ctpPr.isSetNumPr()) {
-            ctpPr.addNewNumPr();
-        }
-        ctpPr.getNumPr().addNewIlvl().setVal(BigInteger.ZERO);
-        ctpPr.getNumPr().addNewNumId().setVal(BigInteger.valueOf(1));
+        // Apply bullet numbering using the initialized numbering definition
+        paragraph.setNumID(bulletNumId);
+        paragraph.setIndentationLeft(BULLET_INDENT);
+        paragraph.setIndentationHanging(360);
     }
 
     /**
@@ -662,6 +750,28 @@ public class StructuredDocxConverter {
         } else {
             pPr.unsetKeepLines();
         }
+    }
+
+    /**
+     * Sanitizes text by removing Markdown formatting.
+     * Removes **bold**, ### headers, # headers, and leading Markdown bullets.
+     * Preserves asterisks that are part of technical data (e.g., C++, Bash*).
+     */
+    private String sanitizeMarkdown(String text) {
+        if (text == null || text.isEmpty()) {
+            return text;
+        }
+        // Remove **bold** markers
+        String sanitized = text.replaceAll("\\*\\*(.+?)\\*\\*", "$1");
+        // Remove ### headers
+        sanitized = sanitized.replaceAll("^###\\s*", "");
+        // Remove ## headers
+        sanitized = sanitized.replaceAll("^##\\s*", "");
+        // Remove # headers
+        sanitized = sanitized.replaceAll("^#\\s*", "");
+        // Remove leading Markdown bullets (- or *) at start of line
+        sanitized = sanitized.replaceAll("^[-*]\\s+", "");
+        return sanitized.trim();
     }
 
     /**
