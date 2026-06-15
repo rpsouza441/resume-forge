@@ -239,13 +239,13 @@ public class StructuredDocxConverter {
 
         // Create level 0 (first level bullets)
         CTLvl lvl = ctAbstractNum.addNewLvl();
-        lvl.setIlvl(0);
+        lvl.setIlvl(BigInteger.valueOf(0));
 
-        // Start message ID for the bullet
-        lvl.addNewStartMsgId(BigInteger.ZERO);
+        // Start value for the bullet list
+        lvl.addNewStart().setVal(BigInteger.ONE);
 
         // Level text (empty means use bullet character from font)
-        CTLevelText levelText = lvl.addNewLevelText();
+        CTLevelText levelText = lvl.addNewLvlText();
         levelText.setVal("");
 
         // Bullet format
@@ -274,8 +274,8 @@ public class StructuredDocxConverter {
         XWPFParagraph paragraph = document.createParagraph();
         // Use OOXML border instead of underscore characters
         paragraph.setBorderBottom(Borders.SINGLE);
-        paragraph.setSpacingBefore(BigInteger.valueOf(80));   // ~4pt before
-        paragraph.setSpacingAfter(BigInteger.valueOf(160));  // ~8pt after
+        paragraph.setSpacingBefore(80);   // ~4pt before
+        paragraph.setSpacingAfter(160);    // ~8pt after
     }
 
     /**
@@ -379,17 +379,17 @@ public class StructuredDocxConverter {
      */
     private void createSkillsSection(XWPFDocument document, List<SkillCategory> skills) {
         for (SkillCategory category : skills) {
-            // Category name as bold text
+            // Category name as bold text (sanitize markdown from category name)
             XWPFParagraph categoryPara = document.createParagraph();
             XWPFRun categoryRun = categoryPara.createRun();
             categoryRun.setBold(true);
-            categoryRun.setText(category.category() + ":");
+            categoryRun.setText(sanitizeMarkdown(category.category()) + ":");
             categoryRun.setFontSize(Integer.parseInt(BODY_FONT_SIZE));
             categoryRun.setFontFamily(DEFAULT_FONT);
             setParagraphSpacing(categoryPara, 0, 0);
             setLeftAlignment(categoryPara);
 
-            // Skills as bullet items
+            // Skills as bullet items (already sanitized in createBulletItem)
             if (category.items() != null) {
                 for (String skill : category.items()) {
                     if (skill != null && !skill.isEmpty()) {
@@ -416,10 +416,10 @@ public class StructuredDocxConverter {
      * - Highlights (bullets reais)
      */
     private void createExperienceEntry(XWPFDocument document, Experience exp) {
-        // Company and Role on same line (bold)
+        // Company and Role on same line (bold, sanitize markdown from role)
         StringBuilder roleCompanyLine = new StringBuilder();
         if (exp.officialRole() != null && !exp.officialRole().isEmpty()) {
-            roleCompanyLine.append(exp.officialRole());
+            roleCompanyLine.append(sanitizeMarkdown(exp.officialRole()));
         }
         if (exp.company() != null && !exp.company().isEmpty()) {
             if (roleCompanyLine.length() > 0) roleCompanyLine.append(" | ");
@@ -745,8 +745,10 @@ public class StructuredDocxConverter {
         CTP ctp = paragraph.getCTP();
         CTPPr pPr = ctp.isSetPPr() ? ctp.getPPr() : ctp.addNewPPr();
         if (keepTogether) {
-            CTOnOff onOff = pPr.isSetKeepLines() ? pPr.getKeepLines() : pPr.addNewKeepLines();
-            onOff.setVal(STOnOff.TRUE);
+            // Create the keepLines element - its mere existence means "keep together"
+            if (!pPr.isSetKeepLines()) {
+                pPr.addNewKeepLines();
+            }
         } else {
             pPr.unsetKeepLines();
         }
@@ -763,12 +765,12 @@ public class StructuredDocxConverter {
         }
         // Remove **bold** markers
         String sanitized = text.replaceAll("\\*\\*(.+?)\\*\\*", "$1");
-        // Remove ### headers
-        sanitized = sanitized.replaceAll("^###\\s*", "");
-        // Remove ## headers
-        sanitized = sanitized.replaceAll("^##\\s*", "");
-        // Remove # headers
-        sanitized = sanitized.replaceAll("^#\\s*", "");
+        // Remove ### headers (anywhere in text)
+        sanitized = sanitized.replaceAll("\\s*###\\s*", " ");
+        // Remove ## headers (anywhere in text)
+        sanitized = sanitized.replaceAll("\\s*##\\s*", " ");
+        // Remove # headers (anywhere in text)
+        sanitized = sanitized.replaceAll("\\s*#\\s*", " ");
         // Remove leading Markdown bullets (- or *) at start of line
         sanitized = sanitized.replaceAll("^[-*]\\s+", "");
         return sanitized.trim();
