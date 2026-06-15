@@ -813,17 +813,26 @@ public class StructuredDocxConverter {
             return new ResumeStructure(null, null, null, null, null, null, null, null, null, null);
         }
 
-        String professionalTitle = getString(jsonb, "professional_title");
-        String professionalSummary = getString(jsonb, "professional_summary");
+        // Handle both flat structure and nested "sections" structure
+        // AI prompt returns: optimized_resume.sections.experience, etc.
+        // But code expects: optimized_resume.experience at root level
+        Map<String, Object> source = jsonb;
+        if (jsonb.containsKey("sections") && jsonb.get("sections") instanceof Map) {
+            log.debug("Extracting resume data from optimized_resume.sections");
+            source = (Map<String, Object>) jsonb.get("sections");
+        }
 
-        List<SkillCategory> skills = parseSkillCategories(getList(jsonb, "skills"));
-        List<Experience> experience = parseExperience(getList(jsonb, "experience"));
-        List<String> previousExperienceSummary = getStringList(jsonb, "previous_experience_summary");
-        List<Project> projects = parseProjects(getList(jsonb, "projects"));
-        List<Education> education = parseEducation(getList(jsonb, "education"));
-        List<Certification> certifications = parseCertifications(getList(jsonb, "certifications"));
-        List<Training> trainings = parseTrainings(getList(jsonb, "trainings"));
-        List<Language> languages = parseLanguages(getList(jsonb, "languages"));
+        String professionalTitle = getString(source, "professional_title");
+        String professionalSummary = getString(source, "professional_summary");
+
+        List<SkillCategory> skills = parseSkillCategories(getList(source, "skills"));
+        List<Experience> experience = parseExperience(getList(source, "experience"));
+        List<String> previousExperienceSummary = getStringList(source, "previous_experience_summary");
+        List<Project> projects = parseProjects(getList(source, "projects"));
+        List<Education> education = parseEducation(getList(source, "education"));
+        List<Certification> certifications = parseCertifications(getList(source, "certifications"));
+        List<Training> trainings = parseTrainings(getList(source, "trainings"));
+        List<Language> languages = parseLanguages(getList(source, "languages"));
 
         return new ResumeStructure(
                 professionalTitle,
