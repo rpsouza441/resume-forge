@@ -124,19 +124,24 @@ public class DocxGenerationService {
                 StructuredDocxConverter.ResumeStructure structure = StructuredDocxConverter.fromJson(optimized);
                 StructuredDocxConverter.ResumeHeader header = extractHeader(resumeProfile);
 
-                // Log diagnóstico
-                log.info("DOCX_RENDERER=STRUCTURED schemaVersion=2 hasHeader=true experiences={} skillGroups={} projects={} trainings={} markdownFallback=false",
+                // Enhanced diagnostic logging
+                log.info("DOCX_RENDERER=STRUCTURED schemaVersion=2 hasHeader={} experiences={} skillGroups={} projects={} trainings={} education={} certifications={} languages={}",
+                        header != null && header.name() != null && !header.name().isBlank(),
                         structure.experience() != null ? structure.experience().size() : 0,
                         structure.skills() != null ? structure.skills().size() : 0,
                         structure.projects() != null ? structure.projects().size() : 0,
-                        structure.trainings() != null ? structure.trainings().size() : 0);
+                        structure.trainings() != null ? structure.trainings().size() : 0,
+                        structure.education() != null ? structure.education().size() : 0,
+                        structure.certifications() != null ? structure.certifications().size() : 0,
+                        structure.languages() != null ? structure.languages().size() : 0);
 
                 document = structuredConverter.createDocument(header, structure);
                 rendererUsed = "STRUCTURED";
                 log.info("DOCX generated from structured data for generatedResumeId={}", generatedResumeId);
             } else {
                 // Fallback para markdown (temporario)
-                log.warn("DOCX_RENDERER=MARKDOWN markdownFallback=true - optimized_resume not found in contentJsonb");
+                log.warn("DOCX_RENDERER=MARKDOWN markdownFallback=true - optimized_resume not found in contentJsonb, contentJsonb_keys={}",
+                        contentJsonb != null ? contentJsonb.keySet() : "null");
                 document = converter.convert(markdown);
                 rendererUsed = "MARKDOWN";
                 log.warn("DOCX fallback to markdown for generatedResumeId={}", generatedResumeId);
@@ -210,6 +215,18 @@ public class DocxGenerationService {
                 linkedin = (String) contacts.getOrDefault("linkedin", "");
                 github = (String) contacts.getOrDefault("github", "");
             }
+        }
+
+        // Diagnostic: Log all extracted header fields
+        log.info("HEADER_EXTRACTED: name=[{}], title=[{}], location=[{}], email=[{}], phone=[{}], linkedin=[{}], github=[{}]",
+                name, title, location, email, phone, linkedin, github);
+
+        // Validate: If name is null or empty, log ERROR
+        if (name == null || name.isBlank()) {
+            log.error("HEADER_VALIDATION_FAILED: header.name is null or empty for resumeProfile={}, jsonb_keys={}, has_profile={}",
+                    resumeProfile.getId(),
+                    jsonb != null ? jsonb.keySet() : "null",
+                    jsonb != null && jsonb.containsKey("profile"));
         }
 
         return new StructuredDocxConverter.ResumeHeader(name, title, location, email, phone, linkedin, github);

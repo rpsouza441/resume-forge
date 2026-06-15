@@ -35,6 +35,9 @@ import java.util.Map;
 @Component
 public class StructuredDocxConverter {
 
+    // Use static logger to avoid creating a new logger instance for each conversion
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(StructuredDocxConverter.class);
+
     // Font settings (all in half-points for Apache POI)
     private static final String DEFAULT_FONT = "Arial";
 
@@ -111,6 +114,9 @@ public class StructuredDocxConverter {
      * @throws IllegalArgumentException if document would be empty
      */
     public XWPFDocument createDocument(ResumeHeader header, ResumeStructure structure) {
+        log.info("DOCX_CONVERTER_START: header.name=[{}], structure.sections={}",
+                header.name(),
+                countStructureSections(structure));
         validateInput(header, structure);
 
         XWPFDocument document = new XWPFDocument();
@@ -119,6 +125,7 @@ public class StructuredDocxConverter {
         setDocumentMargins(document);
 
         // Header section
+        log.info("DOCX_CONVERTER_HEADER: creating header paragraphs for [{}]", header.name());
         createNameParagraph(document, header.name());
         createTitleParagraph(document, header.title());
         createContactParagraph(document, header);
@@ -215,6 +222,20 @@ public class StructuredDocxConverter {
         return true;
     }
 
+    private int countStructureSections(ResumeStructure structure) {
+        int count = 0;
+        if (hasContent(structure.professionalSummary())) count++;
+        if (hasContent(structure.skills())) count++;
+        if (hasContent(structure.experience())) count++;
+        if (hasContent(structure.previousExperienceSummary())) count++;
+        if (hasContent(structure.projects())) count++;
+        if (hasContent(structure.education())) count++;
+        if (hasContent(structure.certifications())) count++;
+        if (hasContent(structure.trainings())) count++;
+        if (hasContent(structure.languages())) count++;
+        return count;
+    }
+
     /**
      * Sets document margins to 1.8cm top/bottom and 2.0cm left/right.
      */
@@ -282,6 +303,7 @@ public class StructuredDocxConverter {
      * Creates the name paragraph (16pt, bold).
      */
     private void createNameParagraph(XWPFDocument document, String name) {
+        log.info("Creating name paragraph: [{}]", name);
         XWPFParagraph paragraph = document.createParagraph();
         XWPFRun run = paragraph.createRun();
         run.setText(name);
@@ -297,6 +319,7 @@ public class StructuredDocxConverter {
      * Creates the professional title paragraph (11pt).
      */
     private void createTitleParagraph(XWPFDocument document, String title) {
+        log.info("Creating title paragraph: [{}]", title);
         if (title == null || title.isEmpty()) return;
 
         XWPFParagraph paragraph = document.createParagraph();
@@ -312,6 +335,8 @@ public class StructuredDocxConverter {
      * Creates the contact information paragraph (9pt).
      */
     private void createContactParagraph(XWPFDocument document, ResumeHeader header) {
+        log.info("Creating contact paragraph: location=[{}], email=[{}], phone=[{}], linkedin=[{}], github=[{}]",
+                header.location(), header.email(), header.phone(), header.linkedin(), header.github());
         StringBuilder contactLine = new StringBuilder();
 
         if (header.location() != null && !header.location().isEmpty()) {
