@@ -11,19 +11,19 @@ description: Multi-phase project roadmap
 
 | # | Phase | Plans | Status | Priority |
 |---|-------|-------|--------|----------|
-| 1 | DOCX Fix | 1 | COMPLETE | 🔴 Alta |
+| 1 | DOCX Fix | 1 | IN PROGRESS | 🔴 Alta |
 | 2 | AI Config Frontend | 0 | PLANNED | 🟡 Média |
 | 3 | UX Improvement | 0 | PLANNED | 🟢 Baixa |
 
 ## Phase Details
 
-### Phase 1: DOCX Fix (COMPLETE)
+### Phase 1: DOCX Fix (IN PROGRESS)
 
-**Plans Completed:** 1/1
+**Plans Created:** 1/1
 
 | Plan | Tasks | Status | Summary |
 |------|-------|--------|---------|
-| 01 | 3/3 | COMPLETE | Fixed margins, bullets, separator |
+| 01 | 3/3 | PENDING | Add named styles (ResumeName, ResumeSectionHeading, ResumeBullet) |
 
 ### Phase 2: AI Config Frontend (PLANNED)
 
