@@ -121,6 +121,19 @@ public class DocxGenerationService {
                 // Usar estrutura
                 @SuppressWarnings("unchecked")
                 Map<String, Object> optimized = (Map<String, Object>) contentJsonb.get("optimized_resume");
+
+                // Debug: log what's in optimized_resume
+                if (log.isDebugEnabled()) {
+                    log.debug("CONTENT_JSONB_DEBUG: optimized_resume keys = {}",
+                        optimized != null ? optimized.keySet() : "null");
+                    if (optimized != null && optimized.containsKey("sections")) {
+                        Object sections = optimized.get("sections");
+                        log.debug("CONTENT_JSONB_DEBUG: sections type = {}, keys = {}",
+                            sections != null ? sections.getClass().getSimpleName() : "null",
+                            sections instanceof Map ? ((Map<?,?>)sections).keySet() : "not a map");
+                    }
+                }
+
                 StructuredDocxConverter.ResumeStructure structure = StructuredDocxConverter.fromJson(optimized);
                 StructuredDocxConverter.ResumeHeader header = extractHeader(resumeProfile);
 
